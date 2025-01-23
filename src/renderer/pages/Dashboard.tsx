@@ -13,6 +13,14 @@ export default function Dashboard() {
     shift: '9:00 AM - 5:00 PM'
   });
   const [aiTips, setAiTips] = useState('');
+  const [selectedProcess, setSelectedProcess] = useState('ms-teams.exe');
+  const [isAudioSessionActive, setIsAudioSessionActive] = useState(false);
+
+  const processes = [
+    { value: 'ms-teams.exe', label: 'Microsoft Teams' },
+    { value: 'zoom.exe', label: 'Zoom' },
+    // Add more processes as needed
+  ];
 
   // Work timer
   useEffect(() => {
@@ -37,6 +45,22 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, [isInCall, callTimer]);
 
+  useEffect(() => {
+    // Listen for audio session updates from main process
+    window.electron.ipcRenderer.on('audio-session-update', (active: boolean) => {
+      setIsAudioSessionActive(active);
+    });
+
+    // Start monitoring when process is selected
+    if (selectedProcess) {
+      window.electron.ipcRenderer.sendMessage('start-monitoring', selectedProcess);
+    }
+
+    return () => {
+      window.electron.ipcRenderer.sendMessage('stop-monitoring');
+    };
+  }, [selectedProcess]);
+
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -57,6 +81,30 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 bg-gray-100 min-h-screen relative">
+      {/* Process Selector */}
+      <div className="bg-white p-4 rounded-lg shadow-md mb-6">
+        <div className="flex items-center justify-between">
+          <select 
+            value={selectedProcess}
+            onChange={(e) => setSelectedProcess(e.target.value)}
+            className="form-select block w-64 rounded-md border-gray-300 shadow-sm"
+          >
+            {processes.map(process => (
+              <option key={process.value} value={process.value}>
+                {process.label}
+              </option>
+            ))}
+          </select>
+          
+          <div className="flex items-center">
+            <div className={`w-3 h-3 rounded-full mr-2 ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'}`} />
+            <span className="text-sm text-gray-600">
+              {isAudioSessionActive ? 'Audio Session Active' : 'No Audio Session'}
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Agent Info & Timer */}
       <div className="bg-white p-4 rounded-lg shadow-md mb-6">
         <div className="flex justify-between items-center">

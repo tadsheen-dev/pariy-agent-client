@@ -1,12 +1,9 @@
-/**
- * Webpack config for production electron main process
- */
-
 import path from 'path';
 import webpack from 'webpack';
 import { merge } from 'webpack-merge';
 import TerserPlugin from 'terser-webpack-plugin';
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
+import CopyWebpackPlugin from 'copy-webpack-plugin';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
@@ -43,21 +40,30 @@ const configuration: webpack.Configuration = {
     ],
   },
 
+  module: {
+    rules: [
+      {
+        test: /\.node$/,
+        use: 'node-loader',
+      },
+    ],
+  },
+
   plugins: [
     new BundleAnalyzerPlugin({
       analyzerMode: process.env.ANALYZE === 'true' ? 'server' : 'disabled',
       analyzerPort: 8888,
     }),
 
-    /**
-     * Create global constants which can be configured at compile time.
-     *
-     * Useful for allowing different behaviour between development builds and
-     * release builds
-     *
-     * NODE_ENV should be production so that modules do not perform certain
-     * development checks
-     */
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: path.resolve(__dirname, '../../build/Release/audio_monitor.node'),
+          to: path.resolve(webpackPaths.distMainPath, 'audio_monitor.node'),
+        },
+      ],
+    }),
+
     new webpack.EnvironmentPlugin({
       NODE_ENV: 'production',
       DEBUG_PROD: false,
@@ -69,11 +75,14 @@ const configuration: webpack.Configuration = {
     }),
   ],
 
-  /**
-   * Disables webpack processing of __dirname and __filename.
-   * If you run the bundle in node.js it falls back to these values of node.js.
-   * https://github.com/webpack/webpack/issues/2010
-   */
+  externals: {
+    'audio_monitor.node': 'commonjs ./audio_monitor.node',
+  },
+
+  resolve: {
+    extensions: ['.js', '.ts', '.node'],
+  },
+
   node: {
     __dirname: false,
     __filename: false,

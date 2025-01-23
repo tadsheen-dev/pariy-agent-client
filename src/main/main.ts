@@ -14,6 +14,14 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+const audioMonitorPath = path.join(__dirname, 'audio_monitor.node');
+
+
+import audioMonitor from "../../.erb/dll/audio_monitor.node";
+
+
+let monitor = null;
+
 
 class AppUpdater {
   constructor() {
@@ -75,6 +83,8 @@ const createWindow = async () => {
     height: 728,
     icon: getAssetPath('icon.png'),
     webPreferences: {
+      contextIsolation: true, // Required for `contextBridge`
+      nodeIntegration: false, // Keep Node.js integration disabled
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
         : path.join(__dirname, '../../.erb/dll/preload.js'),
@@ -135,3 +145,24 @@ app
     });
   })
   .catch(console.log);
+
+
+
+
+ipcMain.on('start-monitoring', (event, processName) => {
+  if (monitor) {
+    monitor.stopMonitoring();
+  }
+
+  monitor = new audioMonitor.AudioMonitor();
+  monitor.startMonitoring(processName, (isActive) => {
+    event.sender.send('audio-session-update', isActive);
+  });
+});
+
+ipcMain.on('stop-monitoring', () => {
+  if (monitor) {
+    monitor.stopMonitoring();
+    monitor = null;
+  }
+}); 
