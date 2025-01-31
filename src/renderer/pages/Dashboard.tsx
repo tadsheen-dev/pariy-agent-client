@@ -1,71 +1,716 @@
-import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
+/// <reference types="dom-mediacapture-record" />
+/// <reference types="dom-screen-capture" />
+
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+// Types for IPC and Media APIs
+declare global {
+  interface Window {
+    electron: {
+      ipcRenderer: {
+        sendMessage(channel: string, ...args: unknown[]): void;
+        on(
+          channel: string,
+          func: (...args: unknown[]) => void,
+        ): (() => void) | undefined;
+      };
+    };
+  }
+
+  interface BlobEvent extends Event {
+    readonly data: Blob;
+    readonly timecode: number;
+  }
+
+  interface MediaRecorderEventMap {
+    dataavailable: BlobEvent;
+    error: Event;
+    pause: Event;
+    resume: Event;
+    start: Event;
+    stop: Event;
+  }
+
+  interface MediaRecorderOptions {
+    mimeType?: string;
+    audioBitsPerSecond?: number;
+    videoBitsPerSecond?: number;
+    bitsPerSecond?: number;
+  }
+
+  interface MediaRecorder extends EventTarget {
+    readonly state: 'inactive' | 'recording' | 'paused';
+    readonly stream: MediaStream;
+    readonly mimeType: string;
+    audioBitsPerSecond: number;
+    videoBitsPerSecond: number;
+    ondataavailable: ((this: MediaRecorder, ev: BlobEvent) => any) | null;
+    onerror: ((this: MediaRecorder, ev: Event) => any) | null;
+    onpause: ((this: MediaRecorder, ev: Event) => any) | null;
+    onresume: ((this: MediaRecorder, ev: Event) => any) | null;
+    onstart: ((this: MediaRecorder, ev: Event) => any) | null;
+    onstop: ((this: MediaRecorder, ev: Event) => any) | null;
+    start(timeslice?: number): void;
+    stop(): void;
+    pause(): void;
+    resume(): void;
+    requestData(): void;
+  }
+
+  const MediaRecorder: {
+    prototype: MediaRecorder;
+    new (stream: MediaStream, options?: MediaRecorderOptions): MediaRecorder;
+    isTypeSupported(mimeType: string): boolean;
+  };
+
+  interface MediaTrackConstraints {
+    mandatory?: {
+      chromeMediaSource?: string;
+      chromeMediaSourceId?: string;
+    };
+    optional?: Array<{ echoCancellation: boolean }>;
+  }
+
+  interface MediaStreamTrack {
+    stop(): void;
+  }
+}
+
+interface Agent {
+  id: string;
+  full_name: string;
+  email: string;
+  avatar_url: string;
+  status: string;
+  platform: {
+    name: string;
+  };
+}
+
+// Add type definitions for electron's desktop capture
+interface ElectronDesktopCaptureConstraints {
+  audio: {
+    mandatory: {
+      chromeMediaSource: 'desktop';
+      chromeMediaSourceId: string;
+    };
+    optional?: Array<{ echoCancellation: boolean }>;
+  };
+  video: false;
+}
+
+// Add MediaTrackConstraints type definition
+interface MediaTrackConstraints {
+  mandatory?: {
+    chromeMediaSource?: string;
+    chromeMediaSourceId?: string;
+  };
+  optional?: Array<{ echoCancellation: boolean }>;
+}
+
+// Add type definitions
+interface CustomMediaTrackConstraints extends MediaTrackConstraints {
+  mandatory?: {
+    chromeMediaSource?: string;
+    chromeMediaSourceId?: string;
+  };
+}
+
+interface CustomMediaStreamConstraints {
+  audio: CustomMediaTrackConstraints;
+  video: false;
+}
 
 export default function Dashboard() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const navigate = useNavigate();
   const [workTimer, setWorkTimer] = useState(0);
   const [callTimer, setCallTimer] = useState(0);
   const [isInCall, setIsInCall] = useState(false);
-  const [agentInfo, setAgentInfo] = useState({
-    name: 'Ahmed Hassan',
-    status: 'online',
-    shift: '9:00 AM - 5:00 PM'
-  });
   const [aiTips, setAiTips] = useState('');
-  const [selectedProcess, setSelectedProcess] = useState('ms-teams.exe');
   const [isAudioSessionActive, setIsAudioSessionActive] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [agent, setAgent] = useState<Agent | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
-  const processes = [
-    { value: 'ms-teams.exe', label: 'Microsoft Teams' },
-    { value: 'zoom.exe', label: 'Zoom' },
-    // Add more processes as needed
-  ];
-
-  // Work timer
+  // Load agent data from localStorage
   useEffect(() => {
-    const timer = setInterval(() => {
-      setWorkTimer(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
+    const agentData = localStorage.getItem('agent_data');
+    if (!agentData) {
+      navigate('/login');
+      return;
+    }
+    setAgent(JSON.parse(agentData));
+  }, [navigate]);
+
+  // Get process name based on platform
+  const getProcessName = (platformName: string): string => {
+    switch (platformName.toLowerCase()) {
+      case 'teams':
+        return 'ms-teams.exe';
+      case 'zoom':
+        // Mencoba berbagai kemungkinan nama proses Zoom
+        return 'Zoom.exe';
+      default:
+        return '';
+    }
+  };
+
+  // Handle recording when audio session changes
+  useEffect(() => {
+    if (isAudioSessionActive && !isRecording && agent) {
+      // Start recording when audio session becomes active
+      try {
+        const startRecording = async () => {
+          try {
+            console.log('Requesting display media...');
+
+            // First get system audio with minimal video
+            const displayStream = await navigator.mediaDevices.getDisplayMedia({
+              audio: true,
+              video: {
+                displaySurface: 'browser',
+                height: { ideal: 1 },
+                width: { ideal: 1 },
+                frameRate: { ideal: 1 },
+              },
+            });
+
+            // Then get microphone audio with appropriate constraints
+            const micStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+              video: false,
+            });
+
+            // Verify streams are valid
+            if (
+              !displayStream ||
+              !displayStream.active ||
+              !micStream ||
+              !micStream.active
+            ) {
+              throw new Error('Invalid media stream');
+            }
+
+            // Get all audio tracks
+            const displayAudioTracks = displayStream.getAudioTracks();
+            const micAudioTracks = micStream.getAudioTracks();
+
+            if (!displayAudioTracks.length && !micAudioTracks.length) {
+              throw new Error('No audio tracks available');
+            }
+
+            // Log track information
+            console.log(
+              'Display audio tracks:',
+              displayAudioTracks.map((track) => ({
+                label: track.label,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState,
+                settings: track.getSettings(),
+              })),
+            );
+
+            console.log(
+              'Microphone audio tracks:',
+              micAudioTracks.map((track) => ({
+                label: track.label,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState,
+                settings: track.getSettings(),
+              })),
+            );
+
+            // Create a new stream with both audio tracks
+            const combinedStream = new MediaStream();
+
+            // Create a single AudioContext for both sources
+            const audioContext = new AudioContext();
+            const destination = audioContext.createMediaStreamDestination();
+
+            // Process microphone audio
+            micAudioTracks.forEach((track) => {
+              console.log(
+                'Adding and configuring microphone track:',
+                track.label,
+              );
+              track.enabled = true;
+              
+              const micSource = audioContext.createMediaStreamSource(micStream);
+              const micGain = audioContext.createGain();
+              micGain.gain.value = 1.0; // Normal microphone volume
+              
+              micSource.connect(micGain);
+              micGain.connect(destination);
+              
+              console.log('Microphone gain set to:', micGain.gain.value);
+            });
+
+            // Process system audio
+            displayAudioTracks.forEach((track) => {
+              console.log(
+                'Adding and configuring system audio track:',
+                track.label,
+              );
+              track.enabled = true;
+
+              const sysSource = audioContext.createMediaStreamSource(displayStream);
+              const sysGain = audioContext.createGain();
+              sysGain.gain.value = 1.5; // Slightly boost system audio
+              
+              sysSource.connect(sysGain);
+              sysGain.connect(destination);
+              
+              console.log('System audio gain set to:', sysGain.gain.value);
+            });
+
+            // Get the mixed audio track from destination
+            const mixedTrack = destination.stream.getAudioTracks()[0];
+            if (!mixedTrack) {
+              throw new Error('Failed to get mixed audio track');
+            }
+
+            // Add the mixed track to combined stream
+            combinedStream.addTrack(mixedTrack);
+
+            // Verify tracks in combined stream
+            const combinedTracks = combinedStream.getAudioTracks();
+            console.log(
+              'Combined stream tracks:',
+              combinedTracks.map((track) => ({
+                label: track.label,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState,
+                settings: track.getSettings(),
+              })),
+            );
+
+            // Store recording start time
+            const recordingStartTime = Date.now();
+
+            // Use a supported MIME type with better audio settings
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+              ? 'audio/webm;codecs=opus'
+              : 'audio/webm';
+            console.log('Using MIME type:', mimeType);
+
+            const options = {
+              mimeType,
+              audioBitsPerSecond: 256000  // Increased bitrate for better quality
+            };
+
+            mediaRecorderRef.current = new MediaRecorder(combinedStream, options);
+            console.log('MediaRecorder settings:', {
+              state: mediaRecorderRef.current.state,
+              mimeType: mediaRecorderRef.current.mimeType,
+              audioBitsPerSecond: mediaRecorderRef.current.audioBitsPerSecond,
+            });
+
+            const chunks: Blob[] = [];
+
+            mediaRecorderRef.current.ondataavailable = (e: BlobEvent) => {
+              console.log('Data available:', e.data.size, 'bytes');
+              if (e.data && e.data.size > 0) {
+                chunks.push(e.data);
+              }
+            };
+
+            mediaRecorderRef.current.onerror = (event: Event) => {
+              console.error('MediaRecorder error:', event);
+              setIsRecording(false);
+              setIsInCall(false);
+
+              // Clean up streams
+              displayStream.getTracks().forEach((track) => track.stop());
+              micStream.getTracks().forEach((track) => track.stop());
+            };
+
+            mediaRecorderRef.current.onstop = async () => {
+              try {
+                console.log('Recording stopped, processing chunks...');
+                if (chunks.length === 0) {
+                  throw new Error('No audio data recorded');
+                }
+
+                const blob = new Blob(chunks, { type: mimeType });
+                console.log('Created blob:', blob.size, 'bytes');
+
+                const buffer = await blob.arrayBuffer();
+                console.log('Created buffer:', buffer.byteLength, 'bytes');
+
+                // Calculate duration
+                const recordingDuration = Date.now() - recordingStartTime;
+                const durationInSeconds = Math.round(recordingDuration / 1000);
+
+                const timestamp = new Date()
+                  .toISOString()
+                  .replace(/[:.]/g, '-');
+                const fileName = `recording-${timestamp}-${durationInSeconds}s.webm`;
+
+                // Send the buffer back to main process with duration
+                window.electron.ipcRenderer.sendMessage('save-recording', {
+                  buffer: Array.from(new Uint8Array(buffer)),
+                  fileName,
+                  agentId: agent.id,
+                  platform: agent.platform.name,
+                  duration: durationInSeconds,
+                  startTime: new Date(recordingStartTime).toISOString(),
+                  endTime: new Date().toISOString(),
+                });
+
+                // Clean up streams
+                displayStream.getTracks().forEach((track) => track.stop());
+                micStream.getTracks().forEach((track) => track.stop());
+
+                // Reset recording state
+                setIsRecording(false);
+                mediaRecorderRef.current = null;
+              } catch (error) {
+                console.error('Failed to save recording:', error);
+                setIsRecording(false);
+                mediaRecorderRef.current = null;
+              }
+            };
+
+            try {
+              console.log('Starting MediaRecorder...');
+              mediaRecorderRef.current.start(1000); // Capture in 1-second chunks
+              setIsRecording(true);
+              setIsInCall(true);
+            } catch (error) {
+              console.error('Failed to start MediaRecorder:', error);
+              displayStream.getTracks().forEach((track) => track.stop());
+              micStream.getTracks().forEach((track) => track.stop());
+              throw error;
+            }
+          } catch (error) {
+            console.error('Error starting recording:', error);
+            setIsRecording(false);
+            setIsInCall(false);
+          }
+        };
+
+        startRecording();
+      } catch (error) {
+        console.error('Failed to start recording:', error);
+        setIsRecording(false);
+        setIsInCall(false);
+      }
+    } else if (!isAudioSessionActive && isRecording) {
+      // Stop recording when audio session ends
+      try {
+        if (
+          mediaRecorderRef.current &&
+          mediaRecorderRef.current.state !== 'inactive'
+        ) {
+          console.log('Stopping recording due to audio session end');
+          mediaRecorderRef.current.stop();
+        }
+        setIsRecording(false);
+        setIsInCall(false);
+        setAiTips('');
+
+        // Ensure all tracks are stopped
+        if (mediaRecorderRef.current?.stream) {
+          mediaRecorderRef.current.stream.getTracks().forEach((track) => {
+            track.stop();
+          });
+        }
+        mediaRecorderRef.current = null;
+      } catch (error) {
+        console.error('Failed to stop recording:', error);
+        setIsRecording(false);
+        setIsInCall(false);
+        mediaRecorderRef.current = null;
+      }
+    }
+  }, [isAudioSessionActive, isRecording, agent]);
+
+  // Add error boundary and retry logic for IPC events
+  useEffect(() => {
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = 1000; // 1 second
+
+    const setupIpcListeners = () => {
+      const cleanup = window.electron.ipcRenderer.on(
+        'start-recording-with-source',
+        async (...args: unknown[]) => {
+          const [data] = args as [
+            { sourceId: string; tempFilePath: string; finalFilePath: string },
+          ];
+
+          try {
+            // Stop any existing recording
+            if (
+              mediaRecorderRef.current &&
+              mediaRecorderRef.current.state !== 'inactive'
+            ) {
+              mediaRecorderRef.current.stop();
+            }
+
+            // Request audio permissions first
+            const constraints: ElectronDesktopCaptureConstraints = {
+              audio: {
+                mandatory: {
+                  chromeMediaSource: 'desktop',
+                  chromeMediaSourceId: data.sourceId,
+                },
+                optional: [{ echoCancellation: false }],
+              },
+              video: false,
+            };
+
+            console.log('Requesting media with constraints:', constraints);
+
+            // Request permissions first
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            console.log('Got audio permission');
+
+            // Then request the desktop audio
+            const stream = await (navigator.mediaDevices as any).getUserMedia(
+              constraints,
+            );
+            console.log('Got media stream:', stream);
+
+            // Check if we actually got audio tracks
+            if (stream.getAudioTracks().length === 0) {
+              throw new Error('No audio tracks available in the stream');
+            }
+
+            // Use a supported MIME type
+            const mimeType = MediaRecorder.isTypeSupported(
+              'audio/webm;codecs=opus',
+            )
+              ? 'audio/webm;codecs=opus'
+              : 'audio/webm';
+            console.log('Using MIME type:', mimeType);
+
+            const options = { mimeType };
+            mediaRecorderRef.current = new MediaRecorder(stream, options);
+            console.log('Created MediaRecorder:', mediaRecorderRef.current);
+
+            const chunks: Blob[] = [];
+
+            mediaRecorderRef.current.ondataavailable = (e: BlobEvent) => {
+              console.log('Data available:', e.data.size);
+              if (e.data.size > 0) {
+                chunks.push(e.data);
+              }
+            };
+
+            mediaRecorderRef.current.onstop = async () => {
+              try {
+                console.log('Recording stopped, processing chunks...');
+                const blob = new Blob(chunks, { type: mimeType });
+                console.log('Created blob:', blob.size);
+                const buffer = await blob.arrayBuffer();
+                console.log('Created buffer:', buffer.byteLength);
+
+                // Send the buffer back to main process for saving and conversion
+                window.electron.ipcRenderer.sendMessage('save-recording', {
+                  buffer: Array.from(new Uint8Array(buffer)),
+                  tempFilePath: data.tempFilePath,
+                  finalFilePath: data.finalFilePath,
+                });
+
+                // Clean up
+                stream.getTracks().forEach((track: MediaStreamTrack) => {
+                  track.stop();
+                  stream.removeTrack(track);
+                });
+              } catch (error) {
+                console.error('Failed to save recording:', error);
+                setIsRecording(false);
+              }
+            };
+
+            mediaRecorderRef.current.onerror = (event: Event) => {
+              console.error('MediaRecorder error:', event);
+              setIsRecording(false);
+              window.electron.ipcRenderer.sendMessage(
+                'recording-status',
+                'error',
+              );
+            };
+
+            console.log('Starting MediaRecorder...');
+            mediaRecorderRef.current.start(1000); // Capture in 1-second chunks
+            window.electron.ipcRenderer.sendMessage(
+              'recording-status',
+              'started',
+            );
+          } catch (error) {
+            console.error('Error starting recording:', error);
+            if (retryCount < maxRetries) {
+              retryCount += 1;
+              console.log(
+                `Retrying in ${retryDelay}ms... (Attempt ${retryCount}/${maxRetries})`,
+              );
+              setTimeout(setupIpcListeners, retryDelay);
+            } else {
+              window.electron.ipcRenderer.sendMessage(
+                'recording-status',
+                'error',
+              );
+              setIsRecording(false);
+            }
+          }
+        },
+      );
+
+      return cleanup;
+    };
+
+    const cleanup = setupIpcListeners();
+    return () => {
+      if (cleanup) cleanup();
+    };
   }, []);
 
-  // Call timer
+  // Call timer - only run when isInCall is true
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let intervalId: ReturnType<typeof setInterval>;
+
     if (isInCall) {
-      timer = setInterval(() => {
-        setCallTimer(prev => prev + 1);
-        // Simulate AI tips
-        if (callTimer % 10 === 0) { // Every 10 seconds
-          setAiTips('Tip: Remember to maintain a positive tone');
-        }
+      intervalId = setInterval(() => {
+        setCallTimer((prevTimer) => prevTimer + 1);
       }, 1000);
-    }
-    return () => clearInterval(timer);
-  }, [isInCall, callTimer]);
-
-  useEffect(() => {
-    // Listen for audio session updates from main process
-    window.electron.ipcRenderer.on('audio-session-update', (active: boolean) => {
-      setIsAudioSessionActive(active);
-    });
-
-    // Start monitoring when process is selected
-    if (selectedProcess) {
-      window.electron.ipcRenderer.sendMessage('start-monitoring', selectedProcess);
     }
 
     return () => {
-      window.electron.ipcRenderer.sendMessage('stop-monitoring');
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
     };
-  }, [selectedProcess]);
+  }, [isInCall]);
+
+  // Work timer
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setWorkTimer((prevTimer) => prevTimer + 1);
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Monitor audio session based on platform
+  useEffect(() => {
+    if (!agent?.platform.name) return;
+
+    const processName = getProcessName(agent.platform.name);
+    if (!processName) return;
+
+    let isCleanedUp = false;
+
+    // Listen for audio session updates from main process
+    const cleanup = window.electron.ipcRenderer.on(
+      'audio-session-update',
+      (...args: unknown[]) => {
+        const [active] = args;
+        if (!isCleanedUp) {
+          console.log('Audio session status changed:', active);
+          setIsAudioSessionActive(active as boolean);
+
+          // Immediately stop recording if audio session ends
+          if (!active && mediaRecorderRef.current?.state === 'recording') {
+            console.log(
+              'Stopping recording immediately due to audio session end',
+            );
+            try {
+              mediaRecorderRef.current.stop();
+              mediaRecorderRef.current.stream.getTracks().forEach((track) => {
+                track.stop();
+              });
+              setIsRecording(false);
+              setIsInCall(false);
+              mediaRecorderRef.current = null;
+            } catch (error) {
+              console.error(
+                'Error stopping recording on audio session end:',
+                error,
+              );
+            }
+          }
+        }
+      },
+    );
+
+    // Start monitoring the process based on platform
+    console.log('Starting audio monitoring for:', processName);
+    window.electron.ipcRenderer.sendMessage('start-monitoring', processName);
+
+    return () => {
+      console.log('Cleaning up audio monitoring');
+      isCleanedUp = true;
+      if (cleanup) cleanup();
+      window.electron.ipcRenderer.sendMessage('stop-monitoring');
+
+      // Ensure recording is stopped on cleanup
+      if (mediaRecorderRef.current?.state === 'recording') {
+        console.log('Stopping recording on cleanup');
+        try {
+          mediaRecorderRef.current.stop();
+          mediaRecorderRef.current.stream.getTracks().forEach((track) => {
+            track.stop();
+          });
+          setIsRecording(false);
+          setIsInCall(false);
+          mediaRecorderRef.current = null;
+        } catch (error) {
+          console.error('Error stopping recording on cleanup:', error);
+        }
+      }
+    };
+  }, [agent]);
+
+  // Listen for recording status updates
+  useEffect(() => {
+    const cleanup = window.electron.ipcRenderer.on(
+      'recording-status',
+      (...args: unknown[]) => {
+        const [status] = args;
+        if (status === 'error') {
+          // eslint-disable-next-line no-console
+          console.error('Recording failed to start');
+          setIsRecording(false);
+        }
+      },
+    );
+
+    return () => {
+      if (cleanup) cleanup();
+    };
+  }, []);
+
+  // Separate effect for handling recording state
+  useEffect(() => {
+    if (!isAudioSessionActive && isRecording && mediaRecorderRef.current) {
+      try {
+        console.log('Stopping recording due to audio session end');
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+        setIsInCall(false);
+      } catch (error) {
+        console.error('Failed to stop recording:', error);
+      }
+    }
+  }, [isAudioSessionActive, isRecording]);
 
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${hours.toString().padStart(2, '0')}:${minutes
+      .toString()
+      .padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleCallSimulation = () => {
@@ -74,32 +719,57 @@ export default function Dashboard() {
   };
 
   const endCall = () => {
+    console.log('Ending call manually');
+
+    // First stop recording if active
+    if (mediaRecorderRef.current?.state === 'recording') {
+      console.log('Stopping recording on manual end call');
+      try {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach((track) => {
+          track.stop();
+        });
+        mediaRecorderRef.current = null;
+      } catch (error) {
+        console.error('Error stopping recording on end call:', error);
+      }
+    }
+
+    // Notify main process to handle audio session
+    window.electron.ipcRenderer.sendMessage('end-call');
+
+    // Reset all states
     setIsInCall(false);
     setCallTimer(0);
     setAiTips('');
+    setIsRecording(false);
+    setIsAudioSessionActive(false);
   };
+
+  if (!agent) {
+    return null;
+  }
 
   return (
     <div className="p-6 bg-gray-100 min-h-screen relative">
-      {/* Process Selector */}
+      {/* Platform & Audio Session Status */}
       <div className="bg-white p-4 rounded-lg shadow-md mb-6">
         <div className="flex items-center justify-between">
-          <select 
-            value={selectedProcess}
-            onChange={(e) => setSelectedProcess(e.target.value)}
-            className="form-select block w-64 rounded-md border-gray-300 shadow-sm"
-          >
-            {processes.map(process => (
-              <option key={process.value} value={process.value}>
-                {process.label}
-              </option>
-            ))}
-          </select>
-          
           <div className="flex items-center">
-            <div className={`w-3 h-3 rounded-full mr-2 ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'}`} />
+            <span className="text-gray-700 font-medium mr-2">Platform:</span>
+            <span className="text-gray-900">{agent.platform.name}</span>
+          </div>
+
+          <div className="flex items-center">
+            <div
+              className={`w-3 h-3 rounded-full mr-2 ${
+                isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'
+              }`}
+            />
             <span className="text-sm text-gray-600">
-              {isAudioSessionActive ? 'Audio Session Active' : 'No Audio Session'}
+              {isAudioSessionActive
+                ? 'Audio Session Active'
+                : 'No Audio Session'}
             </span>
           </div>
         </div>
@@ -109,12 +779,16 @@ export default function Dashboard() {
       <div className="bg-white p-4 rounded-lg shadow-md mb-6">
         <div className="flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800">{agentInfo.name}</h2>
-            <p className="text-gray-600">Shift: {agentInfo.shift}</p>
+            <h2 className="text-2xl font-bold text-gray-800">
+              {agent.full_name}
+            </h2>
+            <p className="text-gray-600">Status: {agent.status}</p>
           </div>
           <div className="text-right">
             <p className="text-sm text-gray-500">Time at work</p>
-            <p className="text-2xl font-mono font-bold text-purple-600">{formatTime(workTimer)}</p>
+            <p className="text-2xl font-mono font-bold text-purple-600">
+              {formatTime(workTimer)}
+            </p>
           </div>
         </div>
       </div>
@@ -122,7 +796,7 @@ export default function Dashboard() {
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
         <div className="bg-white p-6 rounded-lg shadow-md">
-          <h3 className="text-gray-500 mb-2">Today's Calls</h3>
+          <h3 className="text-gray-500 mb-2">Today&apos;s Calls</h3>
           <p className="text-4xl font-bold text-gray-900">15</p>
         </div>
         <div className="bg-white p-6 rounded-lg shadow-md">
@@ -138,6 +812,7 @@ export default function Dashboard() {
       {/* Call Control */}
       {!isInCall ? (
         <button
+          type="button"
           onClick={handleCallSimulation}
           className="bg-green-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-600 transition-colors"
         >
@@ -148,31 +823,44 @@ export default function Dashboard() {
           <div className="bg-white p-8 rounded-lg shadow-xl max-w-2xl w-full mx-4">
             <div className="text-center mb-6">
               <p className="text-sm text-gray-500">Current Call Duration</p>
-              <p className="text-4xl font-mono font-bold text-purple-600">{formatTime(callTimer)}</p>
+              <p className="text-4xl font-mono font-bold text-purple-600">
+                {formatTime(callTimer)}
+              </p>
             </div>
 
             <div className="bg-purple-50 p-4 rounded-lg mb-6">
-              <h3 className="font-medium text-purple-800 mb-2">AI Assistant Tips</h3>
-              <p className="text-purple-600">{aiTips || 'Listening to the conversation...'}</p>
+              <h3 className="font-medium text-purple-800 mb-2">
+                AI Assistant Tips
+              </h3>
+              <p className="text-purple-600">
+                {aiTips || 'Listening to the conversation...'}
+              </p>
             </div>
 
             <div className="space-y-4">
               <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-medium text-gray-800 mb-2">Customer Context</h3>
-                <p className="text-gray-600">Active conversation - analyzing sentiment and context...</p>
+                <h3 className="font-medium text-gray-800 mb-2">
+                  Customer Context
+                </h3>
+                <p className="text-gray-600">
+                  Active conversation - analyzing sentiment and context...
+                </p>
               </div>
 
               <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-medium text-gray-800 mb-2">Suggested Responses</h3>
+                <h3 className="font-medium text-gray-800 mb-2">
+                  Suggested Responses
+                </h3>
                 <ul className="space-y-2 text-gray-600">
-                  <li>"I understand your concern..."</li>
-                  <li>"Let me help you resolve this..."</li>
-                  <li>"Would you like me to explain further?"</li>
+                  <li>&quot;I understand your concern...&quot;</li>
+                  <li>&quot;Let me help you resolve this...&quot;</li>
+                  <li>&quot;Would you like me to explain further?&quot;</li>
                 </ul>
               </div>
             </div>
 
             <button
+              type="button"
               onClick={endCall}
               className="mt-6 w-full bg-red-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-red-600 transition-colors"
             >
@@ -183,4 +871,4 @@ export default function Dashboard() {
       )}
     </div>
   );
-} 
+}

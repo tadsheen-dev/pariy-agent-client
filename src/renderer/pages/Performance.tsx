@@ -1,15 +1,27 @@
 import { useState, useEffect } from 'react';
 
+interface PerformanceData {
+  callsHandled: number;
+  avgSatisfaction: number;
+  avgDuration: string;
+}
+
 export default function Performance() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [performance, setPerformance] = useState({});
+  const [performance, setPerformance] = useState<PerformanceData>({
+    callsHandled: 0,
+    avgSatisfaction: 0,
+    avgDuration: '0:00',
+  });
 
   useEffect(() => {
     const fetchPerformance = async () => {
       try {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1000);
+        });
+
         setPerformance({
           callsHandled: 50,
           avgSatisfaction: 8.2,
@@ -49,17 +61,23 @@ export default function Performance() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-lg shadow-md">
           <h3 className="text-gray-500 mb-2">Calls Handled</h3>
-          <p className="text-4xl font-bold text-gray-900">{performance.callsHandled}</p>
+          <p className="text-4xl font-bold text-gray-900">
+            {performance.callsHandled}
+          </p>
         </div>
         <div className="bg-white p-6 rounded-lg shadow-md">
           <h3 className="text-gray-500 mb-2">Average Satisfaction</h3>
-          <p className="text-4xl font-bold text-gray-900">{performance.avgSatisfaction}/10</p>
+          <p className="text-4xl font-bold text-gray-900">
+            {performance.avgSatisfaction}/10
+          </p>
         </div>
         <div className="bg-white p-6 rounded-lg shadow-md">
           <h3 className="text-gray-500 mb-2">Average Duration</h3>
-          <p className="text-4xl font-bold text-gray-900">{performance.avgDuration}</p>
+          <p className="text-4xl font-bold text-gray-900">
+            {performance.avgDuration}
+          </p>
         </div>
       </div>
     </div>
   );
-} 
+}

@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-export type Channels = 'ipc-example';
+export type Channels =
+  | 'ipc-example'
+  | 'start-monitoring'
+  | 'stop-monitoring'
+  | 'audio-session-update'
+  | 'start-recording'
+  | 'stop-recording'
+  | 'recording-status';
 
 const electronHandler = {
   ipcRenderer: {

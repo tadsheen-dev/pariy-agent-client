@@ -1,5 +1,22 @@
-import { useState } from 'react';
+/* eslint jsx-a11y/label-has-associated-control: [ 2, {
+    "controlComponents": ["input"],
+    "depth": 3
+}] */
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+interface Agent {
+  id: string;
+  full_name: string;
+  email: string;
+  password: string;
+  avatar_url: string;
+  status: string;
+  platform_id: string;
+  platform: {
+    name: string;
+  };
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -7,7 +24,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [formData, setFormData] = useState({
     email: '',
-    password: ''
+    password: '',
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -16,16 +33,41 @@ export default function Login() {
     setError('');
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      if (formData.email && formData.password) {
-        localStorage.setItem('agent_token', 'mock_token');
-        navigate('/');
-      } else {
-        throw new Error('Invalid credentials');
+      const response = await fetch(
+        'http://localhost:3000/api/dashboard/agents/auth',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            email: formData.email,
+            password: formData.password,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Authentication failed');
       }
+
+      const agent: Agent = await response.json();
+
+      // Store agent data in localStorage
+      localStorage.setItem('agent_token', agent.id);
+      localStorage.setItem('agent_data', JSON.stringify(agent));
+      navigate('/');
     } catch (err) {
-      setError('Invalid email or password');
+      setError(
+        err instanceof Error ? err.message : 'Invalid email or password',
+      );
+      // Log error for debugging purposes
+      if (process.env.NODE_ENV !== 'production') {
+        // eslint-disable-next-line no-console
+        console.error('Login error:', err);
+      }
     } finally {
       setLoading(false);
     }
@@ -35,10 +77,12 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="max-w-md w-full px-6 py-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Welcome Back
+          </h1>
           <p className="text-gray-600">Sign in to your agent dashboard</p>
         </div>
-        
+
         {error && (
           <div className="mb-4 p-4 rounded-lg bg-red-50 border border-red-200">
             <p className="text-sm text-red-600">{error}</p>
@@ -47,29 +91,47 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label
+              id="email-label"
+              htmlFor="email"
+              className="block text-sm font-medium text-gray-700 mb-2"
+            >
               Email Address
             </label>
             <input
+              id="email"
+              name="email"
               type="email"
+              aria-labelledby="email-label"
               className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-200 focus:border-purple-400 transition-all"
               placeholder="agent@example.com"
               value={formData.email}
-              onChange={e => setFormData(prev => ({ ...prev, email: e.target.value }))}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, email: e.target.value }))
+              }
               disabled={loading}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label
+              id="password-label"
+              htmlFor="password"
+              className="block text-sm font-medium text-gray-700 mb-2"
+            >
               Password
             </label>
             <input
+              id="password"
+              name="password"
               type="password"
+              aria-labelledby="password-label"
               className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-200 focus:border-purple-400 transition-all"
               placeholder="••••••••"
               value={formData.password}
-              onChange={e => setFormData(prev => ({ ...prev, password: e.target.value }))}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, password: e.target.value }))
+              }
               disabled={loading}
             />
           </div>
@@ -100,4 +162,4 @@ export default function Login() {
       </div>
     </div>
   );
-} 
+}
