@@ -522,3 +522,49 @@ ipcMain.on('end-call', () => {
     }, 100);
   }
 });
+
+// Add save analysis handler
+ipcMain.on('save-analysis', async (event, data) => {
+  try {
+    console.log('Saving analysis results...');
+    const { fileName, analysis, metadata } = data;
+
+    // Create analysis directory if it doesn't exist
+    const analysisDir = path.join(app.getPath('userData'), 'analysis');
+    if (!fs.existsSync(analysisDir)) {
+      fs.mkdirSync(analysisDir, { recursive: true });
+    }
+
+    // Create platform-specific directory
+    const platformDir = path.join(analysisDir, metadata.platform.toLowerCase());
+    if (!fs.existsSync(platformDir)) {
+      fs.mkdirSync(platformDir, { recursive: true });
+    }
+
+    // Create agent-specific directory
+    const agentDir = path.join(platformDir, metadata.agentId);
+    if (!fs.existsSync(agentDir)) {
+      fs.mkdirSync(agentDir, { recursive: true });
+    }
+
+    // Save analysis results
+    const analysisFileName = fileName.replace('.webm', '_analysis.json');
+    const analysisPath = path.join(agentDir, analysisFileName);
+
+    const analysisData = {
+      ...analysis,
+      metadata,
+      fileName,
+      analysisTimestamp: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(analysisPath, JSON.stringify(analysisData, null, 2));
+    console.log('Analysis saved successfully to:', analysisPath);
+
+    // Notify renderer
+    event.reply('analysis-status', 'saved');
+  } catch (error) {
+    console.error('Error saving analysis:', error);
+    event.reply('analysis-status', 'error');
+  }
+});
