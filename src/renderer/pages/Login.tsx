@@ -34,7 +34,7 @@ export default function Login() {
 
     try {
       const response = await fetch(
-        'http://localhost:3000/api/dashboard/agents/auth',
+        'http://localhost:3001/api/dashboard/agents/auth',
         {
           method: 'POST',
           headers: {

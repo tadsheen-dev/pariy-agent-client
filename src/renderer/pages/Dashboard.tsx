@@ -1,6 +1,3 @@
-/// <reference types="dom-mediacapture-record" />
-/// <reference types="dom-screen-capture" />
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -38,31 +35,6 @@ declare global {
     videoBitsPerSecond?: number;
     bitsPerSecond?: number;
   }
-
-  interface MediaRecorder extends EventTarget {
-    readonly state: 'inactive' | 'recording' | 'paused';
-    readonly stream: MediaStream;
-    readonly mimeType: string;
-    audioBitsPerSecond: number;
-    videoBitsPerSecond: number;
-    ondataavailable: ((this: MediaRecorder, ev: BlobEvent) => any) | null;
-    onerror: ((this: MediaRecorder, ev: Event) => any) | null;
-    onpause: ((this: MediaRecorder, ev: Event) => any) | null;
-    onresume: ((this: MediaRecorder, ev: Event) => any) | null;
-    onstart: ((this: MediaRecorder, ev: Event) => any) | null;
-    onstop: ((this: MediaRecorder, ev: Event) => any) | null;
-    start(timeslice?: number): void;
-    stop(): void;
-    pause(): void;
-    resume(): void;
-    requestData(): void;
-  }
-
-  const MediaRecorder: {
-    prototype: MediaRecorder;
-    new(stream: MediaStream, options?: MediaRecorderOptions): MediaRecorder;
-    isTypeSupported(mimeType: string): boolean;
-  };
 
   interface MediaTrackConstraints {
     mandatory?: {
@@ -117,13 +89,8 @@ interface CustomMediaTrackConstraints extends MediaTrackConstraints {
   };
 }
 
-interface CustomMediaStreamConstraints {
-  audio: CustomMediaTrackConstraints;
-  video: false;
-}
-
-// Add new constant for API endpoint
-const ANALYSIS_API_ENDPOINT = 'http://localhost:3000/api/audio-analysis';
+// Update API endpoint constant
+const ANALYSIS_API_ENDPOINT = 'http://localhost:3001/api/audio-analysis';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -287,7 +254,8 @@ export default function Dashboard() {
               );
               track.enabled = true;
 
-              const sysSource = audioContext.createMediaStreamSource(displayStream);
+              const sysSource =
+                audioContext.createMediaStreamSource(displayStream);
               const sysGain = audioContext.createGain();
               sysGain.gain.value = 1.5; // Slightly boost system audio
 
@@ -323,17 +291,22 @@ export default function Dashboard() {
             const recordingStartTime = Date.now();
 
             // Use a supported MIME type with better audio settings
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            const mimeType = MediaRecorder.isTypeSupported(
+              'audio/webm;codecs=opus',
+            )
               ? 'audio/webm;codecs=opus'
               : 'audio/webm';
             console.log('Using MIME type:', mimeType);
 
             const options = {
               mimeType,
-              audioBitsPerSecond: 256000  // Increased bitrate for better quality
+              audioBitsPerSecond: 256000, // Increased bitrate for better quality
             };
 
-            mediaRecorderRef.current = new MediaRecorder(combinedStream, options);
+            mediaRecorderRef.current = new MediaRecorder(
+              combinedStream,
+              options,
+            );
             console.log('MediaRecorder settings:', {
               state: mediaRecorderRef.current.state,
               mimeType: mediaRecorderRef.current.mimeType,
@@ -368,7 +341,6 @@ export default function Dashboard() {
 
                 const blob = new Blob(chunks, { type: mimeType });
                 console.log('Created blob:', blob.size, 'bytes');
-
                 const buffer = await blob.arrayBuffer();
                 console.log('Created buffer:', buffer.byteLength, 'bytes');
 
@@ -376,19 +348,27 @@ export default function Dashboard() {
                 const recordingDuration = Date.now() - recordingStartTime;
                 const durationInSeconds = Math.round(recordingDuration / 1000);
 
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const timestamp = new Date()
+                  .toISOString()
+                  .replace(/[:.]/g, '-');
                 const fileName = `recording-${timestamp}-${durationInSeconds}s.webm`;
 
                 // Create form data for API
                 const formData = new FormData();
-                formData.append('audio', new File([blob], fileName, { type: mimeType }));
-                formData.append('metadata', JSON.stringify({
-                  agentId: agent.id,
-                  platform: agent.platform.name,
-                  duration: durationInSeconds,
-                  timestamp: new Date(recordingStartTime).toISOString(),
-                  endTime: new Date().toISOString(),
-                }));
+                formData.append(
+                  'audio',
+                  new File([blob], fileName, { type: mimeType })
+                );
+                formData.append(
+                  'metadata',
+                  JSON.stringify({
+                    agentId: agent.id,
+                    platform: agent.platform.name,
+                    duration: durationInSeconds,
+                    timestamp: new Date(recordingStartTime).toISOString(),
+                    endTime: new Date().toISOString(),
+                  })
+                );
 
                 // Send to analysis API
                 try {
@@ -405,20 +385,33 @@ export default function Dashboard() {
                   const analysisResponse = await response.json();
                   console.log('Analysis received:', analysisResponse);
 
-                  // Store analysis results in state
                   if (analysisResponse.object) {
-                    setAnalysisResult(analysisResponse.object);
-                    console.log('Transcript:', analysisResponse.object.transcript);
-                    console.log('Analysis Results:', {
-                      'Overall Sentiment': analysisResponse.object.analysis.overallSentiment,
-                      'Key Points': analysisResponse.object.analysis.keyPoints,
-                      'Recommendations': analysisResponse.object.analysis.recommendations,
-                      'Customer Sentiment': analysisResponse.object.analysis.customerSentiment,
-                      'Agent Performance': analysisResponse.object.analysis.agentPerformance,
-                    });
+                    const analysisObj = analysisResponse.object;
+                    // Construct transcript from segments
+                    const transcript = analysisObj.segments
+                      .map((seg: any) => seg.transcript_english)
+                      .join('\n');
+                    // Get overall sentiment from sentimentTrends.agent.averageSentiment
+                    const overallSentiment = analysisObj.sentimentTrends.agent.averageSentiment;
+                    // Derive key points (using keywords, if available)
+                    const keyPoints = analysisObj.keywords ? analysisObj.keywords.map((kw: any) => kw.word) : [];
+                    // Transform analysis into UI expected structure
+                    const transformedAnalysis = {
+                      transcript,
+                      analysis: {
+                        overallSentiment: overallSentiment.toString(),
+                        keyPoints,
+                        recommendations: analysisObj.recommendations,
+                        customerSentiment: analysisObj.sentimentTrends.customer,
+                        agentPerformance: { effectiveness: analysisObj.ai_service_rating || 0, areas: [] }
+                      }
+                    };
+                    setAnalysisResult(transformedAnalysis);
+                    console.log('Transcript:', transcript);
+                    console.log('Analysis Results:', transformedAnalysis);
                   }
 
-                  // Store analysis results
+                  // Send analysis result to main process for saving as well
                   window.electron.ipcRenderer.sendMessage('save-analysis', {
                     fileName,
                     analysis: analysisResponse.object,
@@ -428,7 +421,7 @@ export default function Dashboard() {
                       duration: durationInSeconds,
                       startTime: new Date(recordingStartTime).toISOString(),
                       endTime: new Date().toISOString(),
-                    }
+                    },
                   });
                 } catch (analysisError) {
                   console.error('Failed to analyze recording:', analysisError);
@@ -727,12 +720,11 @@ export default function Dashboard() {
     console.log('Starting audio monitoring for:', processName);
     window.electron.ipcRenderer.sendMessage('start-monitoring', processName);
 
-    return () => {
+    return (): void => {
       console.log('Cleaning up audio monitoring');
       isCleanedUp = true;
       if (cleanup) cleanup();
       window.electron.ipcRenderer.sendMessage('stop-monitoring');
-
       // Ensure recording is stopped on cleanup
       if (mediaRecorderRef.current?.state === 'recording') {
         console.log('Stopping recording on cleanup');
@@ -842,8 +834,7 @@ export default function Dashboard() {
 
           <div className="flex items-center">
             <div
-              className={`w-3 h-3 rounded-full mr-2 ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'
-                }`}
+              className={`w-3 h-3 rounded-full mr-2 ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'}`}
             />
             <span className="text-sm text-gray-600">
               {isAudioSessionActive
@@ -908,31 +899,37 @@ export default function Dashboard() {
             </div>
 
             <div className="bg-purple-50 p-4 rounded-lg mb-6">
-              <h3 className="font-medium text-purple-800 mb-2">AI Assistant Analysis</h3>
+              <h3 className="font-medium text-purple-800 mb-2">
+                AI Assistant Analysis
+              </h3>
               {analysisResult ? (
                 <div className="space-y-4">
                   <div>
-                    <h4 className="font-medium text-purple-700">Overall Sentiment</h4>
-                    <p className="text-purple-600">{analysisResult.analysis.overallSentiment}</p>
+                    <h4 className="font-medium text-purple-700">
+                      Overall Sentiment
+                    </h4>
+                    <p className="text-purple-600">
+                      {analysisResult.analysis.overallSentiment}
+                    </p>
                   </div>
 
                   <div>
                     <h4 className="font-medium text-purple-700">Key Points</h4>
                     <ul className="list-disc pl-5 text-purple-600">
-                      {analysisResult.analysis.keyPoints.map((point, index) => (
-                        <li key={index}>{point}</li>
+                      {analysisResult.analysis.keyPoints.map((point) => (
+                        <li key={point}>{point}</li>
                       ))}
                     </ul>
                   </div>
 
                   <div>
-                    <h4 className="font-medium text-purple-700">Recommendations</h4>
+                    <h4 className="font-medium text-purple-700">
+                      Recommendations
+                    </h4>
                     <ul className="space-y-2">
-                      {analysisResult.analysis.recommendations.map((rec, index) => (
-                        <li key={index} className={`p-2 rounded ${rec.type === 'positive' ? 'bg-green-50' : 'bg-yellow-50'
-                          }`}>
-                          <span className={`font-medium ${rec.type === 'positive' ? 'text-green-700' : 'text-yellow-700'
-                            }`}>
+                      {analysisResult.analysis.recommendations.map((rec) => (
+                        <li key={`${rec.type}-${rec.message}-${rec.impact}`} className={`p-2 rounded ${rec.type === 'positive' ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                          <span className={`font-medium ${rec.type === 'positive' ? 'text-green-700' : 'text-yellow-700'}`}>
                             {rec.type === 'positive' ? '✓' : '!'} {rec.impact.toUpperCase()}:
                           </span>
                           <span className="ml-2">{rec.message}</span>
@@ -942,32 +939,40 @@ export default function Dashboard() {
                   </div>
 
                   <div>
-                    <h4 className="font-medium text-purple-700">Agent Performance</h4>
+                    <h4 className="font-medium text-purple-700">
+                      Agent Performance
+                    </h4>
                     <div className="mt-2">
                       <div className="flex items-center">
                         <span className="text-purple-600">Effectiveness:</span>
                         <div className="ml-2 flex-1 bg-gray-200 rounded-full h-2">
                           <div
                             className="bg-purple-600 rounded-full h-2"
-                            style={{ width: `${analysisResult.analysis.agentPerformance.effectiveness}%` }}
+                            style={{
+                              width: `${analysisResult.analysis.agentPerformance.effectiveness}%`,
+                            }}
                           />
                         </div>
                         <span className="ml-2 text-purple-600">
-                          {analysisResult.analysis.agentPerformance.effectiveness}%
+                          {
+                            analysisResult.analysis.agentPerformance
+                              .effectiveness
+                          }
+                          %
                         </span>
                       </div>
 
                       <div className="mt-3">
-                        {analysisResult.analysis.agentPerformance.areas.map((area, index) => (
-                          <div key={index} className="mb-2">
+                        {analysisResult.analysis.agentPerformance.areas.map((area) => (
+                          <div key={`${area.category}-${area.score}`} className="mb-2">
                             <div className="flex justify-between text-sm">
                               <span className="text-purple-700">{area.category}</span>
                               <span className="text-purple-600">{area.score}/10</span>
                             </div>
                             {area.suggestions.length > 0 && (
                               <ul className="text-sm text-purple-600 pl-4 mt-1">
-                                {area.suggestions.map((suggestion, idx) => (
-                                  <li key={idx}>• {suggestion}</li>
+                                {area.suggestions.map((suggestion) => (
+                                  <li key={suggestion}>• {suggestion}</li>
                                 ))}
                               </ul>
                             )}

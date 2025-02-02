@@ -36,7 +36,7 @@ interface AudioMonitor {
 }
 
 interface AudioMonitorConstructor {
-  new (): AudioMonitor;
+  new(): AudioMonitor;
   AudioMonitor: new () => AudioMonitor;
 }
 
