@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+/* eslint-disable prettier/prettier */
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // Types for IPC and Media APIs
@@ -36,14 +37,6 @@ declare global {
     bitsPerSecond?: number;
   }
 
-  interface MediaTrackConstraints {
-    mandatory?: {
-      chromeMediaSource?: string;
-      chromeMediaSourceId?: string;
-    };
-    optional?: Array<{ echoCancellation: boolean }>;
-  }
-
   interface MediaStreamTrack {
     stop(): void;
   }
@@ -72,25 +65,11 @@ interface ElectronDesktopCaptureConstraints {
   video: false;
 }
 
-// Add MediaTrackConstraints type definition
-interface MediaTrackConstraints {
-  mandatory?: {
-    chromeMediaSource?: string;
-    chromeMediaSourceId?: string;
-  };
-  optional?: Array<{ echoCancellation: boolean }>;
-}
-
-// Add type definitions
-interface CustomMediaTrackConstraints extends MediaTrackConstraints {
-  mandatory?: {
-    chromeMediaSource?: string;
-    chromeMediaSourceId?: string;
-  };
-}
-
 // Update API endpoint constant
 const ANALYSIS_API_ENDPOINT = 'http://localhost:3001/api/audio-analysis';
+
+// Add NodeJS type import
+/// <reference types="node" />
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -150,332 +129,324 @@ export default function Dashboard() {
     }
   };
 
+  // Helper function to handle recording stop wrapped in useCallback
+  const handleRecordingStop = useCallback(async (
+    recordingChunks: Blob[],
+    recordingMimeType: string,
+    recordingDuration: number
+  ) => {
+    console.log('MediaRecorder stopped');
+    try {
+      console.log('Processing chunks...');
+      if (recordingChunks.length === 0) {
+        throw new Error('No audio data recorded');
+      }
+
+      // Create WebM with proper duration metadata
+      const finalBlob = new Blob(recordingChunks, { type: recordingMimeType });
+      const arrayBuffer = await finalBlob.arrayBuffer();
+
+      // Add WebM duration metadata
+      const view = new DataView(arrayBuffer);
+      const durationScale = 1000000000; // nanoseconds
+      const durationPos = arrayBuffer.byteLength - 8; // Duration is typically stored near the end
+      view.setFloat64(durationPos, recordingDuration * durationScale);
+
+      console.log('Final recording duration:', recordingDuration, 'seconds');
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `recording-${timestamp}-${Math.round(recordingDuration)}s.webm`;
+
+      // Create form data with accurate duration
+      const formData = new FormData();
+      formData.append(
+        'audio',
+        new File([arrayBuffer], fileName, {
+          type: recordingMimeType,
+          lastModified: Date.now()
+        })
+      );
+
+      const recordingStartDate = new Date(Date.now() - (recordingDuration * 1000));
+      const recordingEndDate = new Date();
+
+      const metadata = {
+        agentId: agent?.id,
+        platform: agent?.platform.name,
+        duration: Math.round(recordingDuration),
+        timestamp: recordingStartDate.toISOString(),
+        endTime: recordingEndDate.toISOString(),
+      };
+
+      formData.append('metadata', JSON.stringify(metadata));
+
+      // Send to analysis API
+      try {
+        console.log('Sending recording for analysis...');
+        const response = await fetch(ANALYSIS_API_ENDPOINT, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Analysis failed: ${response.statusText}`);
+        }
+
+        const analysisResponse = await response.json();
+        console.log('Analysis received:', analysisResponse);
+
+        if (analysisResponse.object) {
+          const analysisObj = analysisResponse.object;
+          // Construct transcript from segments
+          const transcript = analysisObj.segments
+            .map((seg: any) => seg.transcript_english)
+            .join('\n');
+          // Get overall sentiment from sentimentTrends.agent.averageSentiment
+          const overallSentiment = analysisObj.sentimentTrends.agent.averageSentiment;
+          // Derive key points (using keywords, if available)
+          const keyPoints = analysisObj.keywords ? analysisObj.keywords.map((kw: any) => kw.word) : [];
+          // Transform analysis into UI expected structure
+          const transformedAnalysis = {
+            transcript,
+            analysis: {
+              overallSentiment: overallSentiment.toString(),
+              keyPoints,
+              recommendations: analysisObj.recommendations,
+              customerSentiment: analysisObj.sentimentTrends.customer,
+              agentPerformance: { effectiveness: analysisObj.ai_service_rating || 0, areas: [] }
+            }
+          };
+          setAnalysisResult(transformedAnalysis);
+          console.log('Transcript:', transcript);
+          console.log('Analysis Results:', transformedAnalysis);
+        }
+
+        // Save recording with proper metadata
+        window.electron.ipcRenderer.sendMessage('save-recording', {
+          buffer: Array.from(new Uint8Array(arrayBuffer)),
+          fileName,
+          ...metadata
+        });
+
+      } catch (error) {
+        console.error('Failed to process recording:', error);
+      } finally {
+        setIsRecording(false);
+        mediaRecorderRef.current = null;
+      }
+    } catch (error) {
+      console.error('Failed to save recording:', error);
+      setIsRecording(false);
+      mediaRecorderRef.current = null;
+    }
+  }, [agent]);
+
   // Handle recording when audio session changes
   useEffect(() => {
     if (isAudioSessionActive && !isRecording && agent) {
-      // Start recording when audio session becomes active
-      try {
-        const startRecording = async () => {
-          try {
-            console.log('Requesting display media...');
+      const startRecording = async () => {
+        try {
+          console.log('Requesting display media...');
 
-            // First get system audio with minimal video
-            const displayStream = await navigator.mediaDevices.getDisplayMedia({
-              audio: true,
-              video: {
-                displaySurface: 'browser',
-                height: { ideal: 1 },
-                width: { ideal: 1 },
-                frameRate: { ideal: 1 },
-              },
-            });
+          // First get system audio with minimal video
+          const displayStream = await navigator.mediaDevices.getDisplayMedia({
+            audio: true,
+            video: {
+              displaySurface: 'browser',
+              height: { ideal: 1 },
+              width: { ideal: 1 },
+              frameRate: { ideal: 1 },
+            },
+          });
 
-            // Then get microphone audio with appropriate constraints
-            const micStream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-              },
-              video: false,
-            });
+          // Then get microphone audio with appropriate constraints
+          const micStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+            video: false,
+          });
 
-            // Verify streams are valid
-            if (
-              !displayStream ||
-              !displayStream.active ||
-              !micStream ||
-              !micStream.active
-            ) {
-              throw new Error('Invalid media stream');
-            }
+          // Verify streams are valid
+          if (
+            !displayStream ||
+            !displayStream.active ||
+            !micStream ||
+            !micStream.active
+          ) {
+            throw new Error('Invalid media stream');
+          }
 
-            // Get all audio tracks
-            const displayAudioTracks = displayStream.getAudioTracks();
-            const micAudioTracks = micStream.getAudioTracks();
+          // Get all audio tracks
+          const displayAudioTracks = displayStream.getAudioTracks();
+          const micAudioTracks = micStream.getAudioTracks();
 
-            if (!displayAudioTracks.length && !micAudioTracks.length) {
-              throw new Error('No audio tracks available');
-            }
+          if (!displayAudioTracks.length && !micAudioTracks.length) {
+            throw new Error('No audio tracks available');
+          }
 
-            // Log track information
+          // Log track information
+          console.log(
+            'Display audio tracks:',
+            displayAudioTracks.map((track) => ({
+              label: track.label,
+              enabled: track.enabled,
+              muted: track.muted,
+              readyState: track.readyState,
+              settings: track.getSettings(),
+            })),
+          );
+
+          console.log(
+            'Microphone audio tracks:',
+            micAudioTracks.map((track) => ({
+              label: track.label,
+              enabled: track.enabled,
+              muted: track.muted,
+              readyState: track.readyState,
+              settings: track.getSettings(),
+            })),
+          );
+
+          // Create a new stream with both audio tracks
+          const combinedStream = new MediaStream();
+
+          // Create a single AudioContext for both sources
+          const audioContext = new AudioContext();
+          const destination = audioContext.createMediaStreamDestination();
+
+          // Process microphone audio
+          micAudioTracks.forEach((track) => {
             console.log(
-              'Display audio tracks:',
-              displayAudioTracks.map((track) => ({
-                label: track.label,
-                enabled: track.enabled,
-                muted: track.muted,
-                readyState: track.readyState,
-                settings: track.getSettings(),
-              })),
+              'Adding and configuring microphone track:',
+              track.label,
             );
+            track.enabled = true;
 
+            const micSource = audioContext.createMediaStreamSource(micStream);
+            const micGain = audioContext.createGain();
+            micGain.gain.value = 1.0; // Normal microphone volume
+
+            micSource.connect(micGain);
+            micGain.connect(destination);
+
+            console.log('Microphone gain set to:', micGain.gain.value);
+          });
+
+          // Process system audio
+          displayAudioTracks.forEach((track) => {
             console.log(
-              'Microphone audio tracks:',
-              micAudioTracks.map((track) => ({
-                label: track.label,
-                enabled: track.enabled,
-                muted: track.muted,
-                readyState: track.readyState,
-                settings: track.getSettings(),
-              })),
+              'Adding and configuring system audio track:',
+              track.label,
             );
+            track.enabled = true;
 
-            // Create a new stream with both audio tracks
-            const combinedStream = new MediaStream();
+            const sysSource =
+              audioContext.createMediaStreamSource(displayStream);
+            const sysGain = audioContext.createGain();
+            sysGain.gain.value = 1.5; // Slightly boost system audio
 
-            // Create a single AudioContext for both sources
-            const audioContext = new AudioContext();
-            const destination = audioContext.createMediaStreamDestination();
+            sysSource.connect(sysGain);
+            sysGain.connect(destination);
 
-            // Process microphone audio
-            micAudioTracks.forEach((track) => {
-              console.log(
-                'Adding and configuring microphone track:',
-                track.label,
-              );
-              track.enabled = true;
+            console.log('System audio gain set to:', sysGain.gain.value);
+          });
 
-              const micSource = audioContext.createMediaStreamSource(micStream);
-              const micGain = audioContext.createGain();
-              micGain.gain.value = 1.0; // Normal microphone volume
+          // Get the mixed audio track from destination
+          const mixedTrack = destination.stream.getAudioTracks()[0];
+          if (!mixedTrack) {
+            throw new Error('Failed to get mixed audio track');
+          }
 
-              micSource.connect(micGain);
-              micGain.connect(destination);
+          // Add the mixed track to combined stream
+          combinedStream.addTrack(mixedTrack);
 
-              console.log('Microphone gain set to:', micGain.gain.value);
-            });
+          // Verify tracks in combined stream
+          const combinedTracks = combinedStream.getAudioTracks();
+          console.log(
+            'Combined stream tracks:',
+            combinedTracks.map((track) => ({
+              label: track.label,
+              enabled: track.enabled,
+              muted: track.muted,
+              readyState: track.readyState,
+              settings: track.getSettings(),
+            })),
+          );
 
-            // Process system audio
-            displayAudioTracks.forEach((track) => {
-              console.log(
-                'Adding and configuring system audio track:',
-                track.label,
-              );
-              track.enabled = true;
+          // Use a supported MIME type with better audio settings
+          const mimeType = MediaRecorder.isTypeSupported(
+            'audio/webm;codecs=opus',
+          )
+            ? 'audio/webm;codecs=opus'
+            : 'audio/webm';
+          console.log('Using MIME type:', mimeType);
 
-              const sysSource =
-                audioContext.createMediaStreamSource(displayStream);
-              const sysGain = audioContext.createGain();
-              sysGain.gain.value = 1.5; // Slightly boost system audio
+          const options = {
+            mimeType,
+            audioBitsPerSecond: 256000, // Increased bitrate for better quality
+          };
 
-              sysSource.connect(sysGain);
-              sysGain.connect(destination);
+          mediaRecorderRef.current = new MediaRecorder(
+            combinedStream,
+            options,
+          );
 
-              console.log('System audio gain set to:', sysGain.gain.value);
-            });
+          // Create AudioContext for duration tracking
+          let recordingStartTime = audioContext.currentTime;
 
-            // Get the mixed audio track from destination
-            const mixedTrack = destination.stream.getAudioTracks()[0];
-            if (!mixedTrack) {
-              throw new Error('Failed to get mixed audio track');
+          mediaRecorderRef.current.onstart = () => {
+            console.log('MediaRecorder started');
+            recordingStartTime = audioContext.currentTime;
+          };
+
+          const chunks: Blob[] = [];
+
+          mediaRecorderRef.current.ondataavailable = (e: BlobEvent) => {
+            console.log('Data available:', e.data.size, 'bytes');
+            if (e.data && e.data.size > 0) {
+              chunks.push(e.data);
             }
+          };
 
-            // Add the mixed track to combined stream
-            combinedStream.addTrack(mixedTrack);
+          mediaRecorderRef.current.onerror = async (event: Event) => {
+            console.error('MediaRecorder error:', event);
+            await handleRecordingStop(chunks, mimeType, audioContext.currentTime - recordingStartTime);
 
-            // Verify tracks in combined stream
-            const combinedTracks = combinedStream.getAudioTracks();
-            console.log(
-              'Combined stream tracks:',
-              combinedTracks.map((track) => ({
-                label: track.label,
-                enabled: track.enabled,
-                muted: track.muted,
-                readyState: track.readyState,
-                settings: track.getSettings(),
-              })),
-            );
+            // Clean up streams
+            displayStream.getTracks().forEach((track) => track.stop());
+            micStream.getTracks().forEach((track) => track.stop());
 
-            // Store recording start time
-            const recordingStartTime = Date.now();
-
-            // Use a supported MIME type with better audio settings
-            const mimeType = MediaRecorder.isTypeSupported(
-              'audio/webm;codecs=opus',
-            )
-              ? 'audio/webm;codecs=opus'
-              : 'audio/webm';
-            console.log('Using MIME type:', mimeType);
-
-            const options = {
-              mimeType,
-              audioBitsPerSecond: 256000, // Increased bitrate for better quality
-            };
-
-            mediaRecorderRef.current = new MediaRecorder(
-              combinedStream,
-              options,
-            );
-            console.log('MediaRecorder settings:', {
-              state: mediaRecorderRef.current.state,
-              mimeType: mediaRecorderRef.current.mimeType,
-              audioBitsPerSecond: mediaRecorderRef.current.audioBitsPerSecond,
-            });
-
-            const chunks: Blob[] = [];
-
-            mediaRecorderRef.current.ondataavailable = (e: BlobEvent) => {
-              console.log('Data available:', e.data.size, 'bytes');
-              if (e.data && e.data.size > 0) {
-                chunks.push(e.data);
-              }
-            };
-
-            mediaRecorderRef.current.onerror = (event: Event) => {
-              console.error('MediaRecorder error:', event);
-              setIsRecording(false);
-              setIsInCall(false);
-
-              // Clean up streams
-              displayStream.getTracks().forEach((track) => track.stop());
-              micStream.getTracks().forEach((track) => track.stop());
-            };
-
-            mediaRecorderRef.current.onstop = async () => {
-              try {
-                console.log('Recording stopped, processing chunks...');
-                if (chunks.length === 0) {
-                  throw new Error('No audio data recorded');
-                }
-
-                const blob = new Blob(chunks, { type: mimeType });
-                console.log('Created blob:', blob.size, 'bytes');
-                const buffer = await blob.arrayBuffer();
-                console.log('Created buffer:', buffer.byteLength, 'bytes');
-
-                // Calculate duration
-                const recordingDuration = Date.now() - recordingStartTime;
-                const durationInSeconds = Math.round(recordingDuration / 1000);
-
-                const timestamp = new Date()
-                  .toISOString()
-                  .replace(/[:.]/g, '-');
-                const fileName = `recording-${timestamp}-${durationInSeconds}s.webm`;
-
-                // Create form data for API
-                const formData = new FormData();
-                formData.append(
-                  'audio',
-                  new File([blob], fileName, { type: mimeType })
-                );
-                formData.append(
-                  'metadata',
-                  JSON.stringify({
-                    agentId: agent.id,
-                    platform: agent.platform.name,
-                    duration: durationInSeconds,
-                    timestamp: new Date(recordingStartTime).toISOString(),
-                    endTime: new Date().toISOString(),
-                  })
-                );
-
-                // Send to analysis API
-                try {
-                  console.log('Sending recording for analysis...');
-                  const response = await fetch(ANALYSIS_API_ENDPOINT, {
-                    method: 'POST',
-                    body: formData,
-                  });
-
-                  if (!response.ok) {
-                    throw new Error(`Analysis failed: ${response.statusText}`);
-                  }
-
-                  const analysisResponse = await response.json();
-                  console.log('Analysis received:', analysisResponse);
-
-                  if (analysisResponse.object) {
-                    const analysisObj = analysisResponse.object;
-                    // Construct transcript from segments
-                    const transcript = analysisObj.segments
-                      .map((seg: any) => seg.transcript_english)
-                      .join('\n');
-                    // Get overall sentiment from sentimentTrends.agent.averageSentiment
-                    const overallSentiment = analysisObj.sentimentTrends.agent.averageSentiment;
-                    // Derive key points (using keywords, if available)
-                    const keyPoints = analysisObj.keywords ? analysisObj.keywords.map((kw: any) => kw.word) : [];
-                    // Transform analysis into UI expected structure
-                    const transformedAnalysis = {
-                      transcript,
-                      analysis: {
-                        overallSentiment: overallSentiment.toString(),
-                        keyPoints,
-                        recommendations: analysisObj.recommendations,
-                        customerSentiment: analysisObj.sentimentTrends.customer,
-                        agentPerformance: { effectiveness: analysisObj.ai_service_rating || 0, areas: [] }
-                      }
-                    };
-                    setAnalysisResult(transformedAnalysis);
-                    console.log('Transcript:', transcript);
-                    console.log('Analysis Results:', transformedAnalysis);
-                  }
-
-                  // Send analysis result to main process for saving as well
-                  window.electron.ipcRenderer.sendMessage('save-analysis', {
-                    fileName,
-                    analysis: analysisResponse.object,
-                    metadata: {
-                      agentId: agent.id,
-                      platform: agent.platform.name,
-                      duration: durationInSeconds,
-                      startTime: new Date(recordingStartTime).toISOString(),
-                      endTime: new Date().toISOString(),
-                    },
-                  });
-                } catch (analysisError) {
-                  console.error('Failed to analyze recording:', analysisError);
-                }
-
-                // Save original recording
-                window.electron.ipcRenderer.sendMessage('save-recording', {
-                  buffer: Array.from(new Uint8Array(buffer)),
-                  fileName,
-                  agentId: agent.id,
-                  platform: agent.platform.name,
-                  duration: durationInSeconds,
-                  startTime: new Date(recordingStartTime).toISOString(),
-                  endTime: new Date().toISOString(),
-                });
-
-                // Clean up streams
-                displayStream.getTracks().forEach((track) => track.stop());
-                micStream.getTracks().forEach((track) => track.stop());
-
-                // Reset recording state
-                setIsRecording(false);
-                mediaRecorderRef.current = null;
-              } catch (error) {
-                console.error('Failed to save recording:', error);
-                setIsRecording(false);
-                mediaRecorderRef.current = null;
-              }
-            };
-
-            try {
-              console.log('Starting MediaRecorder...');
-              mediaRecorderRef.current.start(1000); // Capture in 1-second chunks
-              setIsRecording(true);
-              setIsInCall(true);
-            } catch (error) {
-              console.error('Failed to start MediaRecorder:', error);
-              displayStream.getTracks().forEach((track) => track.stop());
-              micStream.getTracks().forEach((track) => track.stop());
-              throw error;
-            }
-          } catch (error) {
-            console.error('Error starting recording:', error);
             setIsRecording(false);
             setIsInCall(false);
-          }
-        };
+          };
 
-        startRecording();
-      } catch (error) {
-        console.error('Failed to start recording:', error);
-        setIsRecording(false);
-        setIsInCall(false);
-      }
+          mediaRecorderRef.current.onstop = async () => {
+            await handleRecordingStop(chunks, mimeType, audioContext.currentTime - recordingStartTime);
+          };
+
+          try {
+            console.log('Starting MediaRecorder...');
+            mediaRecorderRef.current.start(1000); // Capture in 1-second chunks
+            setIsRecording(true);
+            setIsInCall(true);
+          } catch (error) {
+            console.error('Failed to start MediaRecorder:', error);
+            audioContext.close();
+            displayStream.getTracks().forEach((track) => track.stop());
+            micStream.getTracks().forEach((track) => track.stop());
+            throw error;
+          }
+        } catch (error) {
+          console.error('Error starting recording:', error);
+          setIsRecording(false);
+          setIsInCall(false);
+        }
+      };
+
+      startRecording();
     } else if (!isAudioSessionActive && isRecording) {
       // Stop recording when audio session ends
       try {
@@ -504,7 +475,7 @@ export default function Dashboard() {
         mediaRecorderRef.current = null;
       }
     }
-  }, [isAudioSessionActive, isRecording, agent]);
+  }, [isAudioSessionActive, isRecording, agent, handleRecordingStop]);
 
   // Add error boundary and retry logic for IPC events
   useEffect(() => {
@@ -644,7 +615,9 @@ export default function Dashboard() {
 
     const cleanup = setupIpcListeners();
     return () => {
-      if (cleanup) cleanup();
+      if (cleanup) {
+        cleanup();
+      }
     };
   }, []);
 
@@ -676,54 +649,54 @@ export default function Dashboard() {
 
   // Monitor audio session based on platform
   useEffect(() => {
-    if (!agent?.platform.name) return;
+    if (!agent?.platform.name) return undefined;
 
     const processName = getProcessName(agent.platform.name);
-    if (!processName) return;
+    if (!processName) return undefined;
 
     let isCleanedUp = false;
 
     // Listen for audio session updates from main process
     const cleanup = window.electron.ipcRenderer.on(
       'audio-session-update',
-      (...args: unknown[]) => {
+      async (...args: unknown[]) => {
         const [active] = args;
         if (!isCleanedUp) {
           console.log('Audio session status changed:', active);
           setIsAudioSessionActive(active as boolean);
 
-          // Immediately stop recording if audio session ends
+          // Handle graceful shutdown when audio session ends
           if (!active && mediaRecorderRef.current?.state === 'recording') {
-            console.log(
-              'Stopping recording immediately due to audio session end',
-            );
+            console.log('Stopping recording due to audio session end');
             try {
+              // Stop recording gracefully
               mediaRecorderRef.current.stop();
-              mediaRecorderRef.current.stream.getTracks().forEach((track) => {
-                track.stop();
+              // Wait for onstop handler to complete
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 1000);
               });
-              setIsRecording(false);
-              setIsInCall(false);
-              mediaRecorderRef.current = null;
+              // Then clean up tracks
+              if (mediaRecorderRef.current?.stream) {
+                mediaRecorderRef.current.stream.getTracks().forEach((track) => {
+                  track.stop();
+                });
+              }
             } catch (error) {
-              console.error(
-                'Error stopping recording on audio session end:',
-                error,
-              );
+              console.error('Error stopping recording on audio session end:', error);
             }
           }
         }
-      },
+      }
     );
 
     // Start monitoring the process based on platform
     console.log('Starting audio monitoring for:', processName);
     window.electron.ipcRenderer.sendMessage('start-monitoring', processName);
 
-    return (): void => {
+    const cleanupFunction = (): void => {
       console.log('Cleaning up audio monitoring');
       isCleanedUp = true;
-      if (cleanup) cleanup();
+      cleanup?.();
       window.electron.ipcRenderer.sendMessage('stop-monitoring');
       // Ensure recording is stopped on cleanup
       if (mediaRecorderRef.current?.state === 'recording') {
@@ -741,7 +714,9 @@ export default function Dashboard() {
         }
       }
     };
-  }, [agent]);
+
+    return cleanupFunction;
+  }, [agent, handleRecordingStop]);
 
   // Listen for recording status updates
   useEffect(() => {
