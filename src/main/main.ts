@@ -326,13 +326,9 @@ ipcMain.on('start-monitoring', (event, processNames: string) => {
 
       monitor?.startMonitoring(trimmedName, (isActive: boolean) => {
         console.log(`Audio session for ${trimmedName}: ${isActive}`);
-        if (isActive) {
-          isAnyProcessActive = true;
-          console.log('Found active audio session in:', trimmedName);
-        }
 
         // Use debounced send function
-        debouncedSendToRenderer('audio-session-update', isAnyProcessActive);
+        debouncedSendToRenderer('audio-session-update', isActive);
       });
     });
   } catch (error) {
@@ -433,17 +429,17 @@ ipcMain.on('start-recording', async (event, data: RecordingData) => {
   }
 });
 
-ipcMain.on('stop-recording', () => {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    mediaRecorder = null;
-  }
+// ipcMain.on('stop-recording', () => {
+//   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+//     mediaRecorder.stop();
+//     mediaRecorder = null;
+//   }
 
-  if (recordingStream) {
-    recordingStream.getTracks().forEach((track) => track.stop());
-    recordingStream = null;
-  }
-});
+//   if (recordingStream) {
+//     recordingStream.getTracks().forEach((track) => track.stop());
+//     recordingStream = null;
+//   }
+// });
 
 // Add save recording handler
 ipcMain.on('save-recording', async (event, data) => {
@@ -509,19 +505,6 @@ ipcMain.on('save-recording', async (event, data) => {
   }
 });
 
-// Add end-call handler
-ipcMain.on('end-call', () => {
-  console.log('Call ended, stopping monitoring');
-  if (monitor) {
-    monitor.stopMonitoring();
-    // Restart monitoring after a short delay
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('audio-session-update', false);
-      }
-    }, 100);
-  }
-});
 
 // Add save analysis handler
 ipcMain.on('save-analysis', async (event, data) => {

@@ -661,6 +661,7 @@ export default function Dashboard() {
       'audio-session-update',
       async (...args: unknown[]) => {
         const [active] = args;
+        console.log(args)
         if (!isCleanedUp) {
           console.log('Audio session status changed:', active);
           setIsAudioSessionActive(active as boolean);
@@ -699,26 +700,13 @@ export default function Dashboard() {
       cleanup?.();
       window.electron.ipcRenderer.sendMessage('stop-monitoring');
       // Ensure recording is stopped on cleanup
-      if (mediaRecorderRef.current?.state === 'recording') {
-        console.log('Stopping recording on cleanup');
-        try {
-          mediaRecorderRef.current.stop();
-          mediaRecorderRef.current.stream.getTracks().forEach((track) => {
-            track.stop();
-          });
-          setIsRecording(false);
-          setIsInCall(false);
-          mediaRecorderRef.current = null;
-        } catch (error) {
-          console.error('Error stopping recording on cleanup:', error);
-        }
-      }
+      endCall()
     };
 
     return cleanupFunction;
   }, [agent, handleRecordingStop]);
 
-  // Listen for recording status updates
+
   useEffect(() => {
     const cleanup = window.electron.ipcRenderer.on(
       'recording-status',
@@ -813,8 +801,8 @@ export default function Dashboard() {
             />
             <span className="text-sm text-gray-600">
               {isAudioSessionActive
-                ? 'Audio Session Active'
-                : 'No Audio Session'}
+                ? 'Call Session Active'
+                : 'No Call Session'}
             </span>
           </div>
         </div>
@@ -856,13 +844,7 @@ export default function Dashboard() {
 
       {/* Call Control */}
       {!isInCall ? (
-        <button
-          type="button"
-          onClick={handleCallSimulation}
-          className="bg-green-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-600 transition-colors"
-        >
-          Simulate Incoming Call
-        </button>
+        <></>
       ) : (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center">
           <div className="bg-white p-8 rounded-lg shadow-xl max-w-2xl w-full mx-4">
@@ -873,107 +855,7 @@ export default function Dashboard() {
               </p>
             </div>
 
-            <div className="bg-purple-50 p-4 rounded-lg mb-6">
-              <h3 className="font-medium text-purple-800 mb-2">
-                AI Assistant Analysis
-              </h3>
-              {analysisResult ? (
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="font-medium text-purple-700">
-                      Overall Sentiment
-                    </h4>
-                    <p className="text-purple-600">
-                      {analysisResult.analysis.overallSentiment}
-                    </p>
-                  </div>
-
-                  <div>
-                    <h4 className="font-medium text-purple-700">Key Points</h4>
-                    <ul className="list-disc pl-5 text-purple-600">
-                      {analysisResult.analysis.keyPoints.map((point) => (
-                        <li key={point}>{point}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div>
-                    <h4 className="font-medium text-purple-700">
-                      Recommendations
-                    </h4>
-                    <ul className="space-y-2">
-                      {analysisResult.analysis.recommendations.map((rec) => (
-                        <li key={`${rec.type}-${rec.message}-${rec.impact}`} className={`p-2 rounded ${rec.type === 'positive' ? 'bg-green-50' : 'bg-yellow-50'}`}>
-                          <span className={`font-medium ${rec.type === 'positive' ? 'text-green-700' : 'text-yellow-700'}`}>
-                            {rec.type === 'positive' ? '✓' : '!'} {rec.impact.toUpperCase()}:
-                          </span>
-                          <span className="ml-2">{rec.message}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div>
-                    <h4 className="font-medium text-purple-700">
-                      Agent Performance
-                    </h4>
-                    <div className="mt-2">
-                      <div className="flex items-center">
-                        <span className="text-purple-600">Effectiveness:</span>
-                        <div className="ml-2 flex-1 bg-gray-200 rounded-full h-2">
-                          <div
-                            className="bg-purple-600 rounded-full h-2"
-                            style={{
-                              width: `${analysisResult.analysis.agentPerformance.effectiveness}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="ml-2 text-purple-600">
-                          {
-                            analysisResult.analysis.agentPerformance
-                              .effectiveness
-                          }
-                          %
-                        </span>
-                      </div>
-
-                      <div className="mt-3">
-                        {analysisResult.analysis.agentPerformance.areas.map((area) => (
-                          <div key={`${area.category}-${area.score}`} className="mb-2">
-                            <div className="flex justify-between text-sm">
-                              <span className="text-purple-700">{area.category}</span>
-                              <span className="text-purple-600">{area.score}/10</span>
-                            </div>
-                            {area.suggestions.length > 0 && (
-                              <ul className="text-sm text-purple-600 pl-4 mt-1">
-                                {area.suggestions.map((suggestion) => (
-                                  <li key={suggestion}>• {suggestion}</li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-purple-600">
-                  {aiTips || 'Analyzing the conversation...'}
-                </p>
-              )}
-            </div>
-
             <div className="space-y-4">
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-medium text-gray-800 mb-2">
-                  Customer Context
-                </h3>
-                <p className="text-gray-600">
-                  Active conversation - analyzing sentiment and context...
-                </p>
-              </div>
-
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h3 className="font-medium text-gray-800 mb-2">
                   Suggested Responses
@@ -986,13 +868,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={endCall}
-              className="mt-6 w-full bg-red-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-red-600 transition-colors"
-            >
-              End Call
-            </button>
           </div>
         </div>
       )}
