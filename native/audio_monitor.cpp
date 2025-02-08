@@ -128,67 +128,107 @@ private:
                 nullptr,
                 (void **)&sessionManager);
 
-            if (SUCCEEDED(hr))
+            if (FAILED(hr) || !sessionManager)
             {
-                IAudioSessionEnumerator *sessionEnumerator = nullptr;
-                hr = sessionManager->GetSessionEnumerator(&sessionEnumerator);
-
-                if (SUCCEEDED(hr))
+                // If activation fails, reinitialize COM objects
+                if (sessionManager)
                 {
-                    int sessionCount;
-                    sessionEnumerator->GetCount(&sessionCount);
+                    sessionManager->Release();
+                }
+                if (defaultDevice)
+                {
+                    defaultDevice->Release();
+                    defaultDevice = nullptr;
+                }
+                if (pEnumerator)
+                {
+                    pEnumerator->Release();
+                    pEnumerator = nullptr;
+                }
+                hr = CoCreateInstance(
+                    __uuidof(MMDeviceEnumerator),
+                    nullptr,
+                    CLSCTX_ALL,
+                    __uuidof(IMMDeviceEnumerator),
+                    (void **)&pEnumerator);
+                if (SUCCEEDED(hr) && pEnumerator)
+                {
+                    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
 
-                    for (int i = 0; i < sessionCount; i++)
+            IAudioSessionEnumerator *sessionEnumerator = nullptr;
+            hr = sessionManager->GetSessionEnumerator(&sessionEnumerator);
+            if (FAILED(hr))
+            {
+                sessionManager->Release();
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+
+            int sessionCount = 0;
+            hr = sessionEnumerator->GetCount(&sessionCount);
+            if (FAILED(hr))
+            {
+                sessionEnumerator->Release();
+                sessionManager->Release();
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+
+            for (int i = 0; i < sessionCount; i++)
+            {
+                IAudioSessionControl *sessionControl = nullptr;
+                hr = sessionEnumerator->GetSession(i, &sessionControl);
+                if (FAILED(hr) || !sessionControl)
+                {
+                    continue;
+                }
+
+                IAudioSessionControl2 *sessionControl2 = nullptr;
+                hr = sessionControl->QueryInterface(
+                    __uuidof(IAudioSessionControl2),
+                    (void **)&sessionControl2);
+                if (SUCCEEDED(hr) && sessionControl2)
+                {
+                    DWORD processId = 0;
+                    sessionControl2->GetProcessId(&processId);
+
+                    if (processId)
                     {
-                        IAudioSessionControl *sessionControl = nullptr;
-                        sessionEnumerator->GetSession(i, &sessionControl);
-
-                        IAudioSessionControl2 *sessionControl2 = nullptr;
-                        sessionControl->QueryInterface(
-                            __uuidof(IAudioSessionControl2),
-                            (void **)&sessionControl2);
-
-                        if (sessionControl2)
+                        HANDLE hProcess = OpenProcess(
+                            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                            FALSE,
+                            processId);
+                        if (hProcess)
                         {
-                            DWORD processId = 0;
-                            sessionControl2->GetProcessId(&processId);
-
-                            if (processId)
+                            char processName[MAX_PATH];
+                            if (GetModuleBaseNameA(
+                                    hProcess,
+                                    nullptr,
+                                    processName,
+                                    MAX_PATH))
                             {
-                                HANDLE hProcess = OpenProcess(
-                                    PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                                    FALSE,
-                                    processId);
-
-                                if (hProcess)
+                                if (std::string(processName).find(targetProcess) != std::string::npos)
                                 {
-                                    char processName[MAX_PATH];
-                                    if (GetModuleBaseNameA(
-                                            hProcess,
-                                            nullptr,
-                                            processName,
-                                            MAX_PATH))
+                                    AudioSessionState state;
+                                    if (SUCCEEDED(sessionControl->GetState(&state)) && state == AudioSessionStateActive)
                                     {
-                                        if (std::string(processName).find(targetProcess) != std::string::npos)
-                                        {
-                                            AudioSessionState state;
-                                            if (SUCCEEDED(sessionControl->GetState(&state)) && state == AudioSessionStateActive)
-                                            {
-                                                isActive = true;
-                                            }
-                                        }
+                                        isActive = true;
                                     }
-                                    CloseHandle(hProcess);
                                 }
                             }
-                            sessionControl2->Release();
+                            CloseHandle(hProcess);
                         }
-                        sessionControl->Release();
                     }
-                    sessionEnumerator->Release();
+                    sessionControl2->Release();
                 }
-                sessionManager->Release();
+                sessionControl->Release();
             }
+            sessionEnumerator->Release();
+            sessionManager->Release();
 
             // Send status update through thread-safe function
             auto callback = [](Napi::Env env, Napi::Function jsCallback, bool *data)
@@ -203,8 +243,10 @@ private:
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
-        defaultDevice->Release();
-        pEnumerator->Release();
+        if (defaultDevice)
+            defaultDevice->Release();
+        if (pEnumerator)
+            pEnumerator->Release();
         CoUninitialize();
     }
 };
