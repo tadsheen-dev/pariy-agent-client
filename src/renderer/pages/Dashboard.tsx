@@ -91,14 +91,6 @@ export default function Dashboard() {
   const [isRecording, setIsRecording] = useState(false);
   const [agent, setAgent] = useState<Agent | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsLoaded(true);
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, []);
 
   // Load agent data from localStorage
   useEffect(() => {
@@ -673,14 +665,6 @@ export default function Dashboard() {
     const secs = seconds % 60;
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
-
-  if (!isLoaded) {
-    return (
-      <div className="h-full flex items-center justify-center bg-gray-100">
-        <div className="animate-spin h-8 w-8 border-4 border-purple-500 border-t-transparent rounded-full" />
-      </div>
-    );
-  }
 
   if (!agent) {
     return null;
