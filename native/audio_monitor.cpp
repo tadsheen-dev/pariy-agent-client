@@ -2,6 +2,7 @@
 // Include delay-load dependencies
 #endif
 
+// NOTE: Linter Warning - 'node_api.h' not found. Jika tidak terjadi error kompilasi, abaikan peringatan ini atau perbarui includePath (misal, di c_cpp_properties.json) untuk memasukkan direktori header Node.js.
 #include <napi.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -44,6 +45,7 @@ private:
     static Napi::FunctionReference constructor;
     std::string targetProcess;
     std::atomic<bool> shouldStop{false};
+    std::atomic<bool> tsfnValid{false};
     std::unique_ptr<std::thread> monitorThread;
     Napi::ThreadSafeFunction tsfn;
 
@@ -68,6 +70,7 @@ private:
             "AudioMonitorCallback",
             0,
             1);
+        tsfnValid = true;
 
         shouldStop = false;
         monitorThread = std::make_unique<std::thread>([this]()
@@ -85,6 +88,7 @@ private:
     void StopMonitoringInternal()
     {
         shouldStop = true;
+        tsfnValid = false;
         if (monitorThread && monitorThread->joinable())
         {
             monitorThread->join();
@@ -98,28 +102,32 @@ private:
     void MonitorAudioSessions()
     {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMMDeviceEnumerator *pEnumerator = nullptr;
-        HRESULT hr = CoCreateInstance(
-            __uuidof(MMDeviceEnumerator),
-            nullptr,
-            CLSCTX_ALL,
-            __uuidof(IMMDeviceEnumerator),
-            (void **)&pEnumerator);
-        if (FAILED(hr))
-        {
-            return;
-        }
-
-        IMMDevice *defaultDevice = nullptr;
-        hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-        if (FAILED(hr))
-        {
-            pEnumerator->Release();
-            return;
-        }
 
         while (!shouldStop)
         {
+            // Inisialisasi ulang pEnumerator dan defaultDevice pada setiap iterasi
+            IMMDeviceEnumerator *pEnumerator = nullptr;
+            HRESULT hr = CoCreateInstance(
+                __uuidof(MMDeviceEnumerator),
+                nullptr,
+                CLSCTX_ALL,
+                __uuidof(IMMDeviceEnumerator),
+                (void **)&pEnumerator);
+            if (FAILED(hr) || !pEnumerator)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+
+            IMMDevice *defaultDevice = nullptr;
+            hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+            if (FAILED(hr) || !defaultDevice)
+            {
+                pEnumerator->Release();
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+
             bool isActive = false;
             IAudioSessionManager2 *sessionManager = nullptr;
             hr = defaultDevice->Activate(
@@ -127,34 +135,10 @@ private:
                 CLSCTX_ALL,
                 nullptr,
                 (void **)&sessionManager);
-
             if (FAILED(hr) || !sessionManager)
             {
-                // If activation fails, reinitialize COM objects
-                if (sessionManager)
-                {
-                    sessionManager->Release();
-                }
-                if (defaultDevice)
-                {
-                    defaultDevice->Release();
-                    defaultDevice = nullptr;
-                }
-                if (pEnumerator)
-                {
-                    pEnumerator->Release();
-                    pEnumerator = nullptr;
-                }
-                hr = CoCreateInstance(
-                    __uuidof(MMDeviceEnumerator),
-                    nullptr,
-                    CLSCTX_ALL,
-                    __uuidof(IMMDeviceEnumerator),
-                    (void **)&pEnumerator);
-                if (SUCCEEDED(hr) && pEnumerator)
-                {
-                    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-                }
+                defaultDevice->Release();
+                pEnumerator->Release();
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
@@ -164,6 +148,8 @@ private:
             if (FAILED(hr))
             {
                 sessionManager->Release();
+                defaultDevice->Release();
+                pEnumerator->Release();
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
@@ -174,6 +160,8 @@ private:
             {
                 sessionEnumerator->Release();
                 sessionManager->Release();
+                defaultDevice->Release();
+                pEnumerator->Release();
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
@@ -205,11 +193,7 @@ private:
                         if (hProcess)
                         {
                             char processName[MAX_PATH];
-                            if (GetModuleBaseNameA(
-                                    hProcess,
-                                    nullptr,
-                                    processName,
-                                    MAX_PATH))
+                            if (GetModuleBaseNameA(hProcess, nullptr, processName, MAX_PATH))
                             {
                                 if (std::string(processName).find(targetProcess) != std::string::npos)
                                 {
@@ -227,10 +211,13 @@ private:
                 }
                 sessionControl->Release();
             }
+
             sessionEnumerator->Release();
             sessionManager->Release();
+            defaultDevice->Release();
+            pEnumerator->Release();
 
-            // Send status update through thread-safe function
+            // Kirim status update lewat thread-safe function
             auto callback = [](Napi::Env env, Napi::Function jsCallback, bool *data)
             {
                 jsCallback.Call({Napi::Boolean::New(env, *data)});
@@ -238,15 +225,23 @@ private:
             };
 
             bool *isActivePtr = new bool(isActive);
-            tsfn.BlockingCall(isActivePtr, callback);
+            if (!tsfnValid || shouldStop)
+            {
+                delete isActivePtr;
+                break;
+            }
+            try
+            {
+                tsfn.BlockingCall(isActivePtr, callback);
+            }
+            catch (...)
+            {
+                delete isActivePtr;
+            }
 
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
-        if (defaultDevice)
-            defaultDevice->Release();
-        if (pEnumerator)
-            pEnumerator->Release();
         CoUninitialize();
     }
 };
