@@ -103,12 +103,12 @@ const configuration: webpack.Configuration = {
     ...(skipDLLs
       ? []
       : [
-          new webpack.DllReferencePlugin({
-            context: webpackPaths.dllPath,
-            manifest: require(manifest),
-            sourceType: 'var',
-          }),
-        ]),
+        new webpack.DllReferencePlugin({
+          context: webpackPaths.dllPath,
+          manifest: require(manifest),
+          sourceType: 'var',
+        }),
+      ]),
 
     new webpack.NoEmitOnErrorsPlugin(),
 
@@ -159,7 +159,7 @@ const configuration: webpack.Configuration = {
         shell: true,
         stdio: 'inherit',
       })
-        .on('close', (code: number) => process.exit(code!))
+        .on('close', (code: number) => { console.error("Preload process exited with code:", code); })
         .on('error', (spawnError) => console.error(spawnError));
 
       console.log('Starting Main Process...');
@@ -174,8 +174,8 @@ const configuration: webpack.Configuration = {
         stdio: 'inherit',
       })
         .on('close', (code: number) => {
+          console.error("Main process exited with code:", code);
           preloadProcess.kill();
-          process.exit(code!);
         })
         .on('error', (spawnError) => console.error(spawnError));
       return middlewares;

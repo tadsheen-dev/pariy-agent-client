@@ -12,6 +12,7 @@ import Dashboard from './pages/Dashboard';
 import MyCalls from './pages/MyCalls';
 import Settings from './pages/Settings';
 import Performance from './pages/Performance';
+import RecordingPopup from './components/RecordingPopup';
 
 // Types
 interface LayoutProps {
@@ -98,14 +99,17 @@ export default function App() {
           path="/*"
           element={
             <PrivateRoute>
-              <Layout>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/calls" element={<MyCalls />} />
-                  <Route path="/performance" element={<Performance />} />
-                  <Route path="/settings" element={<Settings />} />
-                </Routes>
-              </Layout>
+              <>
+                <Layout>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/calls" element={<MyCalls />} />
+                    <Route path="/performance" element={<Performance />} />
+                    <Route path="/settings" element={<Settings />} />
+                  </Routes>
+                </Layout>
+                <RecordingPopup />
+              </>
             </PrivateRoute>
           }
         />

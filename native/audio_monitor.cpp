@@ -2,6 +2,7 @@
 // Include delay-load dependencies
 #endif
 
+// NOTE: Linter Warning - 'node_api.h' not found. Jika tidak terjadi error kompilasi, abaikan peringatan ini atau perbarui includePath (misal, di c_cpp_properties.json) untuk memasukkan direktori header Node.js.
 #include <napi.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -12,6 +13,9 @@
 #include <thread>
 #include <atomic>
 #include <string>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
 
 class AudioMonitor : public Napi::ObjectWrap<AudioMonitor>
 {
@@ -44,8 +48,12 @@ private:
     static Napi::FunctionReference constructor;
     std::string targetProcess;
     std::atomic<bool> shouldStop{false};
+    std::atomic<bool> tsfnValid{false};
+    std::atomic<bool> callbackInProgress{false};
     std::unique_ptr<std::thread> monitorThread;
     Napi::ThreadSafeFunction tsfn;
+    std::mutex tsfnMutex;
+    std::condition_variable cv;
 
     Napi::Value StartMonitoring(const Napi::CallbackInfo &info)
     {
@@ -68,6 +76,7 @@ private:
             "AudioMonitorCallback",
             0,
             1);
+        tsfnValid = true;
 
         shouldStop = false;
         monitorThread = std::make_unique<std::thread>([this]()
@@ -85,41 +94,68 @@ private:
     void StopMonitoringInternal()
     {
         shouldStop = true;
+        {
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            tsfnValid = false;
+        }
+        cv.notify_all();
+        // Wait for any ongoing TSFN callback to finish
+        while (callbackInProgress.load())
+        {
+            std::cout << "AudioMonitor: Waiting for callbackInProgress to finish..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
         if (monitorThread && monitorThread->joinable())
         {
             monitorThread->join();
         }
-        if (tsfn)
         {
-            tsfn.Release();
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            if (tsfn)
+            {
+                tsfn.Release();
+                tsfn = Napi::ThreadSafeFunction();
+            }
         }
     }
 
     void MonitorAudioSessions()
     {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMMDeviceEnumerator *pEnumerator = nullptr;
-        HRESULT hr = CoCreateInstance(
-            __uuidof(MMDeviceEnumerator),
-            nullptr,
-            CLSCTX_ALL,
-            __uuidof(IMMDeviceEnumerator),
-            (void **)&pEnumerator);
-        if (FAILED(hr))
-        {
-            return;
-        }
-
-        IMMDevice *defaultDevice = nullptr;
-        hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-        if (FAILED(hr))
-        {
-            pEnumerator->Release();
-            return;
-        }
 
         while (!shouldStop)
         {
+            // Inisialisasi ulang pEnumerator dan defaultDevice pada setiap iterasi
+            IMMDeviceEnumerator *pEnumerator = nullptr;
+            HRESULT hr = CoCreateInstance(
+                __uuidof(MMDeviceEnumerator),
+                nullptr,
+                CLSCTX_ALL,
+                __uuidof(IMMDeviceEnumerator),
+                (void **)&pEnumerator);
+            if (FAILED(hr) || !pEnumerator)
+            {
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
+
+            IMMDevice *defaultDevice = nullptr;
+            hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+            if (FAILED(hr) || !defaultDevice)
+            {
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
+
             bool isActive = false;
             IAudioSessionManager2 *sessionManager = nullptr;
             hr = defaultDevice->Activate(
@@ -127,35 +163,15 @@ private:
                 CLSCTX_ALL,
                 nullptr,
                 (void **)&sessionManager);
-
             if (FAILED(hr) || !sessionManager)
             {
-                // If activation fails, reinitialize COM objects
-                if (sessionManager)
+                defaultDevice->Release();
+                pEnumerator->Release();
                 {
-                    sessionManager->Release();
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
                 }
-                if (defaultDevice)
-                {
-                    defaultDevice->Release();
-                    defaultDevice = nullptr;
-                }
-                if (pEnumerator)
-                {
-                    pEnumerator->Release();
-                    pEnumerator = nullptr;
-                }
-                hr = CoCreateInstance(
-                    __uuidof(MMDeviceEnumerator),
-                    nullptr,
-                    CLSCTX_ALL,
-                    __uuidof(IMMDeviceEnumerator),
-                    (void **)&pEnumerator);
-                if (SUCCEEDED(hr) && pEnumerator)
-                {
-                    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-                }
-                std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
 
@@ -164,7 +180,13 @@ private:
             if (FAILED(hr))
             {
                 sessionManager->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                defaultDevice->Release();
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -174,7 +196,13 @@ private:
             {
                 sessionEnumerator->Release();
                 sessionManager->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                defaultDevice->Release();
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -205,11 +233,7 @@ private:
                         if (hProcess)
                         {
                             char processName[MAX_PATH];
-                            if (GetModuleBaseNameA(
-                                    hProcess,
-                                    nullptr,
-                                    processName,
-                                    MAX_PATH))
+                            if (GetModuleBaseNameA(hProcess, nullptr, processName, MAX_PATH))
                             {
                                 if (std::string(processName).find(targetProcess) != std::string::npos)
                                 {
@@ -227,26 +251,54 @@ private:
                 }
                 sessionControl->Release();
             }
+
             sessionEnumerator->Release();
             sessionManager->Release();
+            defaultDevice->Release();
+            pEnumerator->Release();
 
-            // Send status update through thread-safe function
+            // Prepare to send status update via TSFN
+            bool *isActivePtr = new bool(isActive);
             auto callback = [](Napi::Env env, Napi::Function jsCallback, bool *data)
             {
                 jsCallback.Call({Napi::Boolean::New(env, *data)});
                 delete data;
             };
 
-            bool *isActivePtr = new bool(isActive);
-            tsfn.BlockingCall(isActivePtr, callback);
+            // Extra synchronization before calling TSFN.BlockingCall
+            {
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    if (!tsfnValid || shouldStop)
+                    {
+                        delete isActivePtr;
+                        break;
+                    }
+                    // Mark that callback is in progress
+                    callbackInProgress = true;
+                    std::cout << "AudioMonitor: TSFN valid, calling BlockingCall" << std::endl;
+                }
+                try
+                {
+                    tsfn.BlockingCall(isActivePtr, callback);
+                }
+                catch (...)
+                {
+                    delete isActivePtr;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    callbackInProgress = false;
+                }
+            }
 
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            {
+                std::unique_lock<std::mutex> lock(tsfnMutex);
+                cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                            { return shouldStop.load(); });
+            }
         }
 
-        if (defaultDevice)
-            defaultDevice->Release();
-        if (pEnumerator)
-            pEnumerator->Release();
         CoUninitialize();
     }
 };
