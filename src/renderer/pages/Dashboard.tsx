@@ -7,6 +7,7 @@ declare global {
   interface Window {
     electron: {
       ipcRenderer: {
+        once(arg0: string, arg1: (response: any) => void): unknown;
         sendMessage(channel: string, ...args: unknown[]): void;
         on(
           channel: string,
