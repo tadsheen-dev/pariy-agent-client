@@ -13,6 +13,9 @@
 #include <thread>
 #include <atomic>
 #include <string>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
 
 class AudioMonitor : public Napi::ObjectWrap<AudioMonitor>
 {
@@ -46,8 +49,11 @@ private:
     std::string targetProcess;
     std::atomic<bool> shouldStop{false};
     std::atomic<bool> tsfnValid{false};
+    std::atomic<bool> callbackInProgress{false};
     std::unique_ptr<std::thread> monitorThread;
     Napi::ThreadSafeFunction tsfn;
+    std::mutex tsfnMutex;
+    std::condition_variable cv;
 
     Napi::Value StartMonitoring(const Napi::CallbackInfo &info)
     {
@@ -88,14 +94,28 @@ private:
     void StopMonitoringInternal()
     {
         shouldStop = true;
-        tsfnValid = false;
+        {
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            tsfnValid = false;
+        }
+        cv.notify_all();
+        // Wait for any ongoing TSFN callback to finish
+        while (callbackInProgress.load())
+        {
+            std::cout << "AudioMonitor: Waiting for callbackInProgress to finish..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
         if (monitorThread && monitorThread->joinable())
         {
             monitorThread->join();
         }
-        if (tsfn)
         {
-            tsfn.Release();
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            if (tsfn)
+            {
+                tsfn.Release();
+                tsfn = Napi::ThreadSafeFunction();
+            }
         }
     }
 
@@ -115,7 +135,11 @@ private:
                 (void **)&pEnumerator);
             if (FAILED(hr) || !pEnumerator)
             {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -124,7 +148,11 @@ private:
             if (FAILED(hr) || !defaultDevice)
             {
                 pEnumerator->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -139,7 +167,11 @@ private:
             {
                 defaultDevice->Release();
                 pEnumerator->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -150,7 +182,11 @@ private:
                 sessionManager->Release();
                 defaultDevice->Release();
                 pEnumerator->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -162,7 +198,11 @@ private:
                 sessionManager->Release();
                 defaultDevice->Release();
                 pEnumerator->Release();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
                 continue;
             }
 
@@ -217,29 +257,46 @@ private:
             defaultDevice->Release();
             pEnumerator->Release();
 
-            // Kirim status update lewat thread-safe function
+            // Prepare to send status update via TSFN
+            bool *isActivePtr = new bool(isActive);
             auto callback = [](Napi::Env env, Napi::Function jsCallback, bool *data)
             {
                 jsCallback.Call({Napi::Boolean::New(env, *data)});
                 delete data;
             };
 
-            bool *isActivePtr = new bool(isActive);
-            if (!tsfnValid || shouldStop)
+            // Extra synchronization before calling TSFN.BlockingCall
             {
-                delete isActivePtr;
-                break;
-            }
-            try
-            {
-                tsfn.BlockingCall(isActivePtr, callback);
-            }
-            catch (...)
-            {
-                delete isActivePtr;
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    if (!tsfnValid || shouldStop)
+                    {
+                        delete isActivePtr;
+                        break;
+                    }
+                    // Mark that callback is in progress
+                    callbackInProgress = true;
+                    std::cout << "AudioMonitor: TSFN valid, calling BlockingCall" << std::endl;
+                }
+                try
+                {
+                    tsfn.BlockingCall(isActivePtr, callback);
+                }
+                catch (...)
+                {
+                    delete isActivePtr;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    callbackInProgress = false;
+                }
             }
 
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            {
+                std::unique_lock<std::mutex> lock(tsfnMutex);
+                cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                            { return shouldStop.load(); });
+            }
         }
 
         CoUninitialize();
