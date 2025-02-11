@@ -12,8 +12,6 @@ interface BlobEvent extends Event {
     readonly timecode: number;
 }
 
-const ANALYSIS_API_ENDPOINT = 'http://localhost:3001/api/audio-analysis';
-
 const getProcessName = (platformName: string): string => {
     switch (platformName.toLowerCase()) {
         case 'teams':
@@ -100,7 +98,7 @@ export default function RecordingPopup() {
 
             try {
                 console.log('Sending recording for analysis...');
-                const response = await fetch(ANALYSIS_API_ENDPOINT, {
+                const response = await fetch(process.env.API_AUDIO_ANALYSIS as string, {
                     method: 'POST',
                     body: formData,
                 });

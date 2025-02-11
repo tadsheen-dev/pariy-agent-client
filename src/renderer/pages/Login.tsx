@@ -33,20 +33,17 @@ export default function Login() {
     setError('');
 
     try {
-      const response = await fetch(
-        'http://localhost:3001/api/dashboard/agents/auth',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            email: formData.email,
-            password: formData.password,
-          }),
+      const response = await fetch(process.env.API_AUTH as string, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      );
+        credentials: 'include',
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+        }),
+      });
 
       if (!response.ok) {
         const errorData = await response.json();

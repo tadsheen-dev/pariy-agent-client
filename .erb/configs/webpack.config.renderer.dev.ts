@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import { merge } from 'webpack-merge';
 import { execSync, spawn } from 'child_process';
 import ReactRefreshWebpackPlugin from '@pmmmwh/react-refresh-webpack-plugin';
+import Dotenv from 'dotenv-webpack';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
@@ -103,15 +104,20 @@ const configuration: webpack.Configuration = {
     ...(skipDLLs
       ? []
       : [
-        new webpack.DllReferencePlugin({
-          context: webpackPaths.dllPath,
-          manifest: require(manifest),
-          sourceType: 'var',
-        }),
-      ]),
+          new webpack.DllReferencePlugin({
+            context: webpackPaths.dllPath,
+            manifest: require(manifest),
+            sourceType: 'var',
+          }),
+        ]),
 
     new webpack.NoEmitOnErrorsPlugin(),
 
+    new Dotenv(),
+
+    /**
+     * Create global constants which can be configured at compile time.
+     */
     new webpack.EnvironmentPlugin({
       NODE_ENV: 'development',
     }),
@@ -159,7 +165,9 @@ const configuration: webpack.Configuration = {
         shell: true,
         stdio: 'inherit',
       })
-        .on('close', (code: number) => { console.error("Preload process exited with code:", code); })
+        .on('close', (code: number) => {
+          console.error('Preload process exited with code:', code);
+        })
         .on('error', (spawnError) => console.error(spawnError));
 
       console.log('Starting Main Process...');
@@ -174,7 +182,7 @@ const configuration: webpack.Configuration = {
         stdio: 'inherit',
       })
         .on('close', (code: number) => {
-          console.error("Main process exited with code:", code);
+          console.error('Main process exited with code:', code);
           preloadProcess.kill();
         })
         .on('error', (spawnError) => console.error(spawnError));
