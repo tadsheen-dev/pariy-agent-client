@@ -1,4 +1,5 @@
-/* eslint-disable prettier/prettier */
+/* Removed unnecessary eslint-disable directive */
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -47,10 +48,13 @@ export default function Dashboard() {
 
   // Listen for audio session updates
   useEffect(() => {
-    const cleanup = window.electron.ipcRenderer.on('audio-session-update', (...args: unknown[]) => {
-      const [active] = args;
-      setIsAudioSessionActive(Boolean(active));
-    });
+    const cleanup = window.electron.ipcRenderer.on(
+      'audio-session-update',
+      (...args: unknown[]) => {
+        const [active] = args;
+        setIsAudioSessionActive(Boolean(active));
+      },
+    );
 
     return () => {
       if (cleanup) cleanup();
@@ -86,7 +90,12 @@ export default function Dashboard() {
             <span className="text-gray-900">{agent.platform.name}</span>
           </div>
           <div className="flex items-center">
-            <div className={`w-3 h-3 rounded-full mr-2 ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'}`} />
+            <div
+              className={`
+                w-3 h-3 rounded-full mr-2 
+                ${isAudioSessionActive ? 'bg-green-500' : 'bg-red-500'}
+              `}
+            />
             <span className="text-sm text-gray-600">
               {isAudioSessionActive ? 'Call Session Active' : 'No Call Session'}
             </span>
@@ -98,12 +107,16 @@ export default function Dashboard() {
       <div className="bg-white p-4 rounded-lg shadow-md mb-6">
         <div className="flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800">{agent.full_name}</h2>
+            <h2 className="text-2xl font-bold text-gray-800">
+              {agent.full_name}
+            </h2>
             <p className="text-gray-600">Status: {agent.status}</p>
           </div>
           <div className="text-right">
             <p className="text-sm text-gray-500">Time at work</p>
-            <p className="text-2xl font-mono font-bold text-purple-600">{formatTime(workTimer)}</p>
+            <p className="text-2xl font-mono font-bold text-purple-600">
+              {formatTime(workTimer)}
+            </p>
           </div>
         </div>
       </div>

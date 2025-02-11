@@ -1,3 +1,5 @@
+/* eslint-disable promise/no-callback-in-promise */
+/* eslint-disable prettier/prettier */
 /* eslint global-require: off, no-console: off, promise/always-return: off */
 
 /**
@@ -47,8 +49,6 @@ interface RecordingData {
 }
 
 let monitor: AudioMonitor | null = null;
-let mediaRecorder: MediaRecorder | null = null;
-let recordingStream: MediaStream | null = null;
 
 // Dynamic import for audio monitor
 let audioMonitor: any;
@@ -157,7 +157,6 @@ const createWindow = async () => {
           callback({
             video: teamsSource || sources[0],
             audio: 'loopback',
-            systemAudio: 'include',
           });
         })
         .catch((error) => {
@@ -318,7 +317,6 @@ ipcMain.on('start-monitoring', (event, processNames: string) => {
     // Split process names and monitor each one
     const processes = processNames.split(',');
     console.log('Will monitor these processes:', processes);
-    let isAnyProcessActive = false;
 
     processes.forEach((processName) => {
       const trimmedName = processName.trim();
@@ -428,18 +426,6 @@ ipcMain.on('start-recording', async (event, data: RecordingData) => {
     safeSendToRenderer('recording-status', 'error');
   }
 });
-
-// ipcMain.on('stop-recording', () => {
-//   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-//     mediaRecorder.stop();
-//     mediaRecorder = null;
-//   }
-
-//   if (recordingStream) {
-//     recordingStream.getTracks().forEach((track) => track.stop());
-//     recordingStream = null;
-//   }
-// });
 
 // Add save recording handler
 ipcMain.on('save-recording', async (event, data) => {

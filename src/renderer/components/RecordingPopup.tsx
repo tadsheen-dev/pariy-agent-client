@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /* eslint-disable prettier/prettier */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
@@ -152,26 +153,25 @@ export default function RecordingPopup() {
             setRecordingActive(Boolean(active));
         });
 
-        return () => {
-            // Cleanup listener
+        const cleanup = (): void => {
             if (listener) listener();
-            // Stop audio monitoring
             console.log('Stopping audio monitoring');
             window.electron.ipcRenderer.sendMessage('stop-monitoring');
 
-            // If recording is active, stop it
             if (mediaRecorderRef.current?.state === 'recording') {
                 console.log('Stopping active recording on unmount');
                 mediaRecorderRef.current.stop();
                 mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
             }
-            // Clear audio context if exists
             if (audioContextRef.current) {
                 audioContextRef.current.close();
                 audioContextRef.current = null;
             }
             mediaRecorderRef.current = null;
         };
+
+        // eslint-disable-next-line consistent-return
+        return cleanup;
     }, [agent]);
 
     // Handle recording when audio session changes

@@ -6,6 +6,12 @@ interface PerformanceData {
   avgDuration: string;
 }
 
+const MOCK_PERFORMANCE_DATA: PerformanceData = {
+  callsHandled: 50,
+  avgSatisfaction: 8.2,
+  avgDuration: '4:15',
+};
+
 export default function Performance() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -18,15 +24,7 @@ export default function Performance() {
   useEffect(() => {
     const fetchPerformance = async () => {
       try {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        });
-
-        setPerformance({
-          callsHandled: 50,
-          avgSatisfaction: 8.2,
-          avgDuration: '4:15',
-        });
+        setPerformance(MOCK_PERFORMANCE_DATA);
       } catch (err) {
         setError('Failed to load performance data');
       } finally {

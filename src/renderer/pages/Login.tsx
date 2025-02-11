@@ -55,7 +55,6 @@ export default function Login() {
 
       const agent: Agent = await response.json();
 
-      // Store agent data in localStorage
       localStorage.setItem('agent_token', agent.id);
       localStorage.setItem('agent_data', JSON.stringify(agent));
       navigate('/');
@@ -63,7 +62,6 @@ export default function Login() {
       setError(
         err instanceof Error ? err.message : 'Invalid email or password',
       );
-      // Log error for debugging purposes
       if (process.env.NODE_ENV !== 'production') {
         // eslint-disable-next-line no-console
         console.error('Login error:', err);
