@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 /**
  * Build config for electron renderer process
  */
@@ -10,6 +11,7 @@ import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer';
 import CssMinimizerPlugin from 'css-minimizer-webpack-plugin';
 import { merge } from 'webpack-merge';
 import TerserPlugin from 'terser-webpack-plugin';
+import Dotenv from 'dotenv-webpack';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import checkNodeEnv from '../scripts/check-node-env';
@@ -81,6 +83,7 @@ const configuration: webpack.Configuration = {
   },
 
   plugins: [
+    new Dotenv(),
     /**
      * Create global constants which can be configured at compile time.
      *
@@ -92,7 +95,7 @@ const configuration: webpack.Configuration = {
      */
     new webpack.EnvironmentPlugin({
       NODE_ENV: 'production',
-      DEBUG_PROD: false,
+      DEBUG_PROD: 'false',
     }),
 
     new MiniCssExtractPlugin({

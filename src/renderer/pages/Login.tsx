@@ -33,20 +33,17 @@ export default function Login() {
     setError('');
 
     try {
-      const response = await fetch(
-        'http://localhost:3001/api/dashboard/agents/auth',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            email: formData.email,
-            password: formData.password,
-          }),
+      const response = await fetch(process.env.API_LOGIN as string, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      );
+        credentials: 'include',
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+        }),
+      });
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -55,15 +52,14 @@ export default function Login() {
 
       const agent: Agent = await response.json();
 
-      // Store agent data in localStorage
       localStorage.setItem('agent_token', agent.id);
       localStorage.setItem('agent_data', JSON.stringify(agent));
+      localStorage.setItem('login_time', Date.now().toString());
       navigate('/');
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Invalid email or password',
       );
-      // Log error for debugging purposes
       if (process.env.NODE_ENV !== 'production') {
         // eslint-disable-next-line no-console
         console.error('Login error:', err);

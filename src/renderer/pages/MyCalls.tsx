@@ -7,6 +7,21 @@ interface Call {
   date: string;
 }
 
+const MOCK_CALLS_DATA: Call[] = [
+  {
+    id: 1,
+    customer: 'John Doe',
+    duration: '3:45',
+    date: '2023-10-01',
+  },
+  {
+    id: 2,
+    customer: 'Jane Smith',
+    duration: '2:30',
+    date: '2023-10-02',
+  },
+];
+
 export default function MyCalls() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -15,24 +30,7 @@ export default function MyCalls() {
   useEffect(() => {
     const fetchCalls = async () => {
       try {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        });
-
-        setCalls([
-          {
-            id: 1,
-            customer: 'John Doe',
-            duration: '3:45',
-            date: '2023-10-01',
-          },
-          {
-            id: 2,
-            customer: 'Jane Smith',
-            duration: '2:30',
-            date: '2023-10-02',
-          },
-        ]);
+        setCalls(MOCK_CALLS_DATA);
       } catch (err) {
         setError('Failed to load calls');
       } finally {

@@ -29,7 +29,6 @@ const electronHandler = {
   },
 };
 
-// Securely expose the `electronHandler` object in the renderer process
 contextBridge.exposeInMainWorld('electron', electronHandler);
 
 export type ElectronHandler = typeof electronHandler;
