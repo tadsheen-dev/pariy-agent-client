@@ -54,6 +54,7 @@ export default function Login() {
 
       localStorage.setItem('agent_token', agent.id);
       localStorage.setItem('agent_data', JSON.stringify(agent));
+      localStorage.setItem('login_time', Date.now().toString());
       navigate('/');
     } catch (err) {
       setError(

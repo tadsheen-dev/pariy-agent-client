@@ -63,10 +63,16 @@ export default function Dashboard() {
 
   // Work timer
   useEffect(() => {
-    const intervalId = setInterval(() => {
-      setWorkTimer((prevTimer) => prevTimer + 1);
-    }, 1000);
-    return () => clearInterval(intervalId);
+    const loginTime = localStorage.getItem('login_time');
+    if (loginTime) {
+      const startTime = parseInt(loginTime, 10);
+      setWorkTimer(Math.floor((Date.now() - startTime) / 1000));
+      const intervalId = setInterval(() => {
+        setWorkTimer(Math.floor((Date.now() - startTime) / 1000));
+      }, 1000);
+      return () => clearInterval(intervalId);
+    }
+    return () => {};
   }, []);
 
   const formatTime = (seconds: number) => {
