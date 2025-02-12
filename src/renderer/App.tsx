@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /* eslint-disable prettier/prettier */
 import {
   MemoryRouter as Router,
@@ -29,9 +30,43 @@ interface PrivateRouteProps {
 function Sidebar() {
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    localStorage.removeItem('agent_token');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      // Get agent data and calculate workTime
+      const agentData = localStorage.getItem('agent_data');
+      const loginTime = localStorage.getItem('login_time');
+      
+      if (agentData && loginTime) {
+        const agent = JSON.parse(agentData);
+        const startTime = parseInt(loginTime, 10);
+        const workTime = Math.floor((Date.now() - startTime) / 1000);
+
+        // Call logout API
+        const response = await fetch(process.env.API_LOGOUT as string, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            agent_id: agent.id,
+            workTime
+          }),
+        });
+
+        if (!response.ok) {
+          console.error('Logout failed:', await response.json());
+        }
+      }
+    } catch (error) {
+      console.error('Error during logout:', error);
+    } finally {
+      // Clear localStorage and navigate to login
+      localStorage.removeItem('agent_token');
+      localStorage.removeItem('agent_data');
+      localStorage.removeItem('login_time');
+      navigate('/login');
+    }
   };
 
   return (

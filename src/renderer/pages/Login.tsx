@@ -33,7 +33,7 @@ export default function Login() {
     setError('');
 
     try {
-      const response = await fetch(process.env.API_AUTH as string, {
+      const response = await fetch(process.env.API_LOGIN as string, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
