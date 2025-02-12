@@ -5,7 +5,7 @@ import App from './App';
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
 
-// Function to handle logout and session cleanup
+// Function to handle logout and session cleanup via fetch (used at startup)
 async function handleLogoutAndCleanup() {
   try {
     const agentData = localStorage.getItem('agent_data');
@@ -16,7 +16,7 @@ async function handleLogoutAndCleanup() {
       const startTime = parseInt(loginTime, 10);
       const workTime = Math.floor((Date.now() - startTime) / 1000);
 
-      // Call logout API
+      // Call logout API via fetch (when time permits)
       const response = await fetch(process.env.API_LOGOUT as string, {
         method: 'POST',
         headers: {
@@ -59,8 +59,20 @@ window.electron.ipcRenderer.once('ipc-example', (response) => {
   console.log('Received response from main process:', response);
 });
 
-// Add an event listener to logout automatically when the app is closed
-window.addEventListener('beforeunload', async () => {
+// Add an event listener to logout automatically when the app is closed using navigator.sendBeacon
+window.addEventListener('beforeunload', () => {
   console.log('App is closing. Logging out...');
-  await handleLogoutAndCleanup();
+  const agentData = localStorage.getItem('agent_data');
+  const loginTime = localStorage.getItem('login_time');
+  if (agentData && loginTime) {
+    const agent = JSON.parse(agentData);
+    const startTime = parseInt(loginTime, 10);
+    const workTime = Math.floor((Date.now() - startTime) / 1000);
+    const data = JSON.stringify({ agent_id: agent.id, workTime });
+    const blob = new Blob([data], { type: 'application/json' });
+    navigator.sendBeacon(process.env.API_LOGOUT as string, blob);
+  }
+  localStorage.removeItem('agent_token');
+  localStorage.removeItem('agent_data');
+  localStorage.removeItem('login_time');
 });
