@@ -7,9 +7,10 @@ import {
   Navigate,
   Link,
   useNavigate,
+  useLocation,
 } from 'react-router-dom';
 import './App.css';
-import { useState, ReactNode } from 'react';
+import { useState, ReactNode, useEffect } from 'react';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import MyCalls from './pages/MyCalls';
@@ -65,6 +66,7 @@ function Sidebar() {
       localStorage.removeItem('agent_token');
       localStorage.removeItem('agent_data');
       localStorage.removeItem('login_time');
+      localStorage.removeItem('pending_logout_session');
       navigate('/login');
     }
   };
@@ -158,6 +160,11 @@ function Layout({ children }: LayoutProps) {
 
 function PrivateRoute({ children }: PrivateRouteProps) {
   const [isAuthenticated] = useState(localStorage.getItem('agent_token')); // Mock auth check
+  useEffect(() => {
+    if (window && window.electron && window.electron.ipcRenderer) {
+      window.electron.ipcRenderer.sendMessage('update-login-status', true);
+    }
+  }, []);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
@@ -166,9 +173,75 @@ function PrivateRoute({ children }: PrivateRouteProps) {
   return children;
 }
 
+function RouteStatusUpdater() {
+  const location = useLocation();
+  useEffect(() => {
+    if (window && window.electron && window.electron.ipcRenderer) {
+      // Set login status to true if not on login page, false if on login page
+      window.electron.ipcRenderer.sendMessage('update-login-status', location.pathname !== '/login');
+    }
+  }, [location]);
+  return null;
+}
+
+function LogoutHandler() {
+  useEffect(() => {
+    const logoutListener = async () => {
+      const agentData = localStorage.getItem('agent_data');
+      const loginTime = localStorage.getItem('login_time');
+      if (agentData && loginTime) {
+        const agent = JSON.parse(agentData);
+        const startTime = parseInt(loginTime, 10);
+        const workTime = Math.floor((Date.now() - startTime) / 1000);
+        try {
+          const response = await fetch(process.env.API_LOGOUT as string, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              agent_id: agent.id,
+              workTime,
+            }),
+          });
+          if (!response.ok) {
+            console.error('Logout failed:', await response.json());
+          }
+        } catch (error) {
+          console.error('Error during logout:', error);
+        }
+      }
+      // Clear authentication data
+      localStorage.removeItem('agent_token');
+      localStorage.removeItem('agent_data');
+      localStorage.removeItem('login_time');
+      localStorage.removeItem('pending_logout_session');
+      if (window && window.electron && window.electron.ipcRenderer) {
+        window.electron.ipcRenderer.sendMessage('logout-complete');
+      }
+    };
+
+    let unsubscribe: (() => void) | undefined;
+    if (window && window.electron && window.electron.ipcRenderer) {
+      unsubscribe = window.electron.ipcRenderer.on('perform-logout', logoutListener);
+    }
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  return null;
+}
+
 export default function App() {
   return (
     <Router>
+      <RouteStatusUpdater />
+      <LogoutHandler />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route

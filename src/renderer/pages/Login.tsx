@@ -2,7 +2,7 @@
     "controlComponents": ["input"],
     "depth": 3
 }] */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 interface Agent {
@@ -26,6 +26,12 @@ export default function Login() {
     email: '',
     password: '',
   });
+
+  useEffect(() => {
+    if (window && window.electron && window.electron.ipcRenderer) {
+      window.electron.ipcRenderer.sendMessage('update-login-status', false);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,6 +61,11 @@ export default function Login() {
       localStorage.setItem('agent_token', agent.id);
       localStorage.setItem('agent_data', JSON.stringify(agent));
       localStorage.setItem('login_time', Date.now().toString());
+
+      if (window && window.electron && window.electron.ipcRenderer) {
+        window.electron.ipcRenderer.sendMessage('update-login-status', true);
+      }
+
       navigate('/');
     } catch (err) {
       setError(

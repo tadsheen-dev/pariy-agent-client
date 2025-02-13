@@ -67,11 +67,16 @@ class AppUpdater {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let isUserLoggedIn = false;
 
 ipcMain.on('ipc-example', async (event, arg) => {
   const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
   console.log(msgTemplate(arg));
   event.reply('ipc-example', msgTemplate('pong'));
+});
+
+ipcMain.on('update-login-status', (event, status) => {
+  isUserLoggedIn = status;
 });
 
 if (process.env.NODE_ENV === 'production') {
@@ -247,6 +252,40 @@ const createWindow = async () => {
     'Available sources:',
     sources.map((s) => s.name),
   );
+
+  // After mainWindow is created and before it's shown, add a close event listener
+  if (mainWindow) {
+    const win = mainWindow;
+    win.on('close', (event) => {
+      const { dialog } = require('electron');
+      if (isUserLoggedIn) {
+        event.preventDefault(); // Always prevent immediate close to handle logout
+        const choice = dialog.showMessageBoxSync(win, {
+          type: 'question',
+          buttons: ['Logout', 'Cancel'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'Logout Confirmation',
+          message: 'You are currently logged in. Would you like to log out before exiting?',
+          noLink: true,
+        });
+        if (choice === 0) {
+          // User chose Logout; signal renderer to record workTime and logout
+          win.webContents.send('perform-logout');
+        }
+        // If Cancel, do nothing and keep the window open
+      }
+    });
+  }
+
+  // Listen for logout completion from renderer
+  ipcMain.on('logout-complete', () => {
+    if (mainWindow) {
+      // Remove close listeners to allow window to close now
+      mainWindow.removeAllListeners('close');
+      mainWindow.close();
+    }
+  });
 };
 
 /**
