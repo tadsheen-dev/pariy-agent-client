@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 /* Removed unnecessary eslint-disable directive */
 
 import React, { useState, useEffect } from 'react';
@@ -72,7 +73,7 @@ export default function Dashboard() {
       }, 1000);
       return () => clearInterval(intervalId);
     }
-    return () => {};
+    return () => { };
   }, []);
 
   const formatTime = (seconds: number) => {

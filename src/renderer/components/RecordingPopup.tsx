@@ -119,10 +119,10 @@ export default function RecordingPopup() {
                     console.log('Analysis Results:', analysisObj);
                 }
 
-                window.electron.ipcRenderer.sendMessage('save-recording', {
-                    buffer: Array.from(new Uint8Array(arrayBuffer)),
+                window.electron.ipcRenderer.sendMessage('save-analysis', {
                     fileName,
-                    ...metadata
+                    analysis: analysisResponse.object,
+                    metadata
                 });
 
             } catch (error) {

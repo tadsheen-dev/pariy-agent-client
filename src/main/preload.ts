@@ -7,7 +7,8 @@ export type Channels =
   | 'audio-session-update'
   | 'start-recording'
   | 'stop-recording'
-  | 'recording-status';
+  | 'recording-status'
+  | 'analysis-status';
 
 const electronHandler = {
   ipcRenderer: {

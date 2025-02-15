@@ -569,10 +569,10 @@ ipcMain.on('save-analysis', async (event, data) => {
     fs.writeFileSync(analysisPath, JSON.stringify(analysisData, null, 2));
     console.log('Analysis saved successfully to:', analysisPath);
 
-    // Notify renderer
-    event.reply('analysis-status', 'saved');
+    // Notify renderer using safeSendToRenderer - now sending an object
+    safeSendToRenderer('analysis-status', { status: 'saved' });
   } catch (error) {
     console.error('Error saving analysis:', error);
-    event.reply('analysis-status', 'error');
+    safeSendToRenderer('analysis-status', { status: 'error' });
   }
 });

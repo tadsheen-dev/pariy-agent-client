@@ -17,6 +17,7 @@ import MyCalls from './pages/MyCalls';
 import Settings from './pages/Settings';
 import Performance from './pages/Performance';
 import RecordingPopup from './components/RecordingPopup';
+import ToastNotification from './components/ToastNotification';
 
 // Types
 interface LayoutProps {
@@ -36,7 +37,7 @@ function Sidebar() {
       // Get agent data and calculate workTime
       const agentData = localStorage.getItem('agent_data');
       const loginTime = localStorage.getItem('login_time');
-      
+
       if (agentData && loginTime) {
         const agent = JSON.parse(agentData);
         const startTime = parseInt(loginTime, 10);
@@ -257,6 +258,7 @@ export default function App() {
                     <Route path="/settings" element={<Settings />} />
                   </Routes>
                 </Layout>
+                <ToastNotification />
                 <RecordingPopup />
               </>
             </PrivateRoute>
