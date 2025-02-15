@@ -2,6 +2,7 @@
 // Include delay-load dependencies
 #endif
 
+// NOTE: Linter Warning - 'node_api.h' not found. Jika tidak terjadi error kompilasi, abaikan peringatan ini atau perbarui includePath (misal, di c_cpp_properties.json) untuk memasukkan direktori header Node.js.
 #include <napi.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -12,14 +13,19 @@
 #include <thread>
 #include <atomic>
 #include <string>
+#include <mutex>
+#include <condition_variable>
+#include <iostream>
 
-class AudioMonitor : public Napi::ObjectWrap<AudioMonitor> {
+class AudioMonitor : public Napi::ObjectWrap<AudioMonitor>
+{
 public:
-    static Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    static Napi::Object Init(Napi::Env env, Napi::Object exports)
+    {
         Napi::Function func = DefineClass(env, "AudioMonitor", {
-            InstanceMethod("startMonitoring", &AudioMonitor::StartMonitoring),
-            InstanceMethod("stopMonitoring", &AudioMonitor::StopMonitoring),
-        });
+                                                                   InstanceMethod("startMonitoring", &AudioMonitor::StartMonitoring),
+                                                                   InstanceMethod("stopMonitoring", &AudioMonitor::StopMonitoring),
+                                                               });
 
         constructor = Napi::Persistent(func);
         constructor.SuppressDestruct();
@@ -27,11 +33,13 @@ public:
         return exports;
     }
 
-    AudioMonitor(const Napi::CallbackInfo& info) : Napi::ObjectWrap<AudioMonitor>(info) {
+    AudioMonitor(const Napi::CallbackInfo &info) : Napi::ObjectWrap<AudioMonitor>(info)
+    {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     }
 
-    ~AudioMonitor() {
+    ~AudioMonitor()
+    {
         StopMonitoringInternal();
         CoUninitialize();
     }
@@ -40,13 +48,19 @@ private:
     static Napi::FunctionReference constructor;
     std::string targetProcess;
     std::atomic<bool> shouldStop{false};
+    std::atomic<bool> tsfnValid{false};
+    std::atomic<bool> callbackInProgress{false};
     std::unique_ptr<std::thread> monitorThread;
     Napi::ThreadSafeFunction tsfn;
+    std::mutex tsfnMutex;
+    std::condition_variable cv;
 
-    Napi::Value StartMonitoring(const Napi::CallbackInfo& info) {
+    Napi::Value StartMonitoring(const Napi::CallbackInfo &info)
+    {
         Napi::Env env = info.Env();
-        
-        if (info.Length() < 2 || !info[0].IsString() || !info[1].IsFunction()) {
+
+        if (info.Length() < 2 || !info[0].IsString() || !info[1].IsFunction())
+        {
             throw Napi::Error::New(env, "Expected process name (string) and callback function");
         }
 
@@ -61,140 +75,239 @@ private:
             callback,
             "AudioMonitorCallback",
             0,
-            1
-        );
+            1);
+        tsfnValid = true;
 
         shouldStop = false;
-        monitorThread = std::make_unique<std::thread>([this]() {
-            MonitorAudioSessions();
-        });
+        monitorThread = std::make_unique<std::thread>([this]()
+                                                      { MonitorAudioSessions(); });
 
         return env.Undefined();
     }
 
-    Napi::Value StopMonitoring(const Napi::CallbackInfo& info) {
+    Napi::Value StopMonitoring(const Napi::CallbackInfo &info)
+    {
         StopMonitoringInternal();
         return info.Env().Undefined();
     }
 
-    void StopMonitoringInternal() {
+    void StopMonitoringInternal()
+    {
         shouldStop = true;
-        if (monitorThread && monitorThread->joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            tsfnValid = false;
+        }
+        cv.notify_all();
+        // Wait for any ongoing TSFN callback to finish
+        while (callbackInProgress.load())
+        {
+            std::cout << "AudioMonitor: Waiting for callbackInProgress to finish..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (monitorThread && monitorThread->joinable())
+        {
             monitorThread->join();
         }
-        if (tsfn) {
-            tsfn.Release();
+        {
+            std::lock_guard<std::mutex> lock(tsfnMutex);
+            if (tsfn)
+            {
+                tsfn.Release();
+                tsfn = Napi::ThreadSafeFunction();
+            }
         }
     }
 
-    void MonitorAudioSessions() {
-        IMMDeviceEnumerator* pEnumerator = nullptr;
-        HRESULT hr = CoCreateInstance(
-            __uuidof(MMDeviceEnumerator),
-            nullptr,
-            CLSCTX_ALL,
-            __uuidof(IMMDeviceEnumerator),
-            (void**)&pEnumerator
-        );
+    void MonitorAudioSessions()
+    {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-        if (FAILED(hr)) {
-            return;
-        }
+        while (!shouldStop)
+        {
+            // Inisialisasi ulang pEnumerator dan defaultDevice pada setiap iterasi
+            IMMDeviceEnumerator *pEnumerator = nullptr;
+            HRESULT hr = CoCreateInstance(
+                __uuidof(MMDeviceEnumerator),
+                nullptr,
+                CLSCTX_ALL,
+                __uuidof(IMMDeviceEnumerator),
+                (void **)&pEnumerator);
+            if (FAILED(hr) || !pEnumerator)
+            {
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
 
-        IMMDevice* defaultDevice = nullptr;
-        hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-        if (FAILED(hr)) {
-            pEnumerator->Release();
-            return;
-        }
+            IMMDevice *defaultDevice = nullptr;
+            hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+            if (FAILED(hr) || !defaultDevice)
+            {
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
 
-        while (!shouldStop) {
             bool isActive = false;
-            IAudioSessionManager2* sessionManager = nullptr;
+            IAudioSessionManager2 *sessionManager = nullptr;
             hr = defaultDevice->Activate(
                 __uuidof(IAudioSessionManager2),
                 CLSCTX_ALL,
                 nullptr,
-                (void**)&sessionManager
-            );
-
-            if (SUCCEEDED(hr)) {
-                IAudioSessionEnumerator* sessionEnumerator = nullptr;
-                hr = sessionManager->GetSessionEnumerator(&sessionEnumerator);
-
-                if (SUCCEEDED(hr)) {
-                    int sessionCount;
-                    sessionEnumerator->GetCount(&sessionCount);
-
-                    for (int i = 0; i < sessionCount; i++) {
-                        IAudioSessionControl* sessionControl = nullptr;
-                        sessionEnumerator->GetSession(i, &sessionControl);
-
-                        IAudioSessionControl2* sessionControl2 = nullptr;
-                        sessionControl->QueryInterface(
-                            __uuidof(IAudioSessionControl2),
-                            (void**)&sessionControl2
-                        );
-
-                        if (sessionControl2) {
-                            DWORD processId = 0;
-                            sessionControl2->GetProcessId(&processId);
-
-                            if (processId) {
-                                HANDLE hProcess = OpenProcess(
-                                    PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                                    FALSE,
-                                    processId
-                                );
-
-                                if (hProcess) {
-                                    char processName[MAX_PATH];
-                                    if (GetModuleBaseNameA(
-                                        hProcess,
-                                        nullptr,
-                                        processName,
-                                        MAX_PATH
-                                    )) {
-                                        if (std::string(processName).find(targetProcess) != std::string::npos) {
-                                            AudioSessionState state;
-                                            if (SUCCEEDED(sessionControl->GetState(&state))) {
-                                                isActive = (state == AudioSessionStateActive);
-                                            }
-                                        }
-                                    }
-                                    CloseHandle(hProcess);
-                                }
-                            }
-                            sessionControl2->Release();
-                        }
-                        sessionControl->Release();
-                    }
-                    sessionEnumerator->Release();
+                (void **)&sessionManager);
+            if (FAILED(hr) || !sessionManager)
+            {
+                defaultDevice->Release();
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
                 }
-                sessionManager->Release();
+                continue;
             }
 
-            // Send status update through thread-safe function
-            auto callback = [](Napi::Env env, Napi::Function jsCallback, bool* data) {
+            IAudioSessionEnumerator *sessionEnumerator = nullptr;
+            hr = sessionManager->GetSessionEnumerator(&sessionEnumerator);
+            if (FAILED(hr))
+            {
+                sessionManager->Release();
+                defaultDevice->Release();
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
+
+            int sessionCount = 0;
+            hr = sessionEnumerator->GetCount(&sessionCount);
+            if (FAILED(hr))
+            {
+                sessionEnumerator->Release();
+                sessionManager->Release();
+                defaultDevice->Release();
+                pEnumerator->Release();
+                {
+                    std::unique_lock<std::mutex> lock(tsfnMutex);
+                    cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                                { return shouldStop.load(); });
+                }
+                continue;
+            }
+
+            for (int i = 0; i < sessionCount; i++)
+            {
+                IAudioSessionControl *sessionControl = nullptr;
+                hr = sessionEnumerator->GetSession(i, &sessionControl);
+                if (FAILED(hr) || !sessionControl)
+                {
+                    continue;
+                }
+
+                IAudioSessionControl2 *sessionControl2 = nullptr;
+                hr = sessionControl->QueryInterface(
+                    __uuidof(IAudioSessionControl2),
+                    (void **)&sessionControl2);
+                if (SUCCEEDED(hr) && sessionControl2)
+                {
+                    DWORD processId = 0;
+                    sessionControl2->GetProcessId(&processId);
+
+                    if (processId)
+                    {
+                        HANDLE hProcess = OpenProcess(
+                            PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                            FALSE,
+                            processId);
+                        if (hProcess)
+                        {
+                            char processName[MAX_PATH];
+                            if (GetModuleBaseNameA(hProcess, nullptr, processName, MAX_PATH))
+                            {
+                                if (std::string(processName).find(targetProcess) != std::string::npos)
+                                {
+                                    AudioSessionState state;
+                                    if (SUCCEEDED(sessionControl->GetState(&state)) && state == AudioSessionStateActive)
+                                    {
+                                        isActive = true;
+                                    }
+                                }
+                            }
+                            CloseHandle(hProcess);
+                        }
+                    }
+                    sessionControl2->Release();
+                }
+                sessionControl->Release();
+            }
+
+            sessionEnumerator->Release();
+            sessionManager->Release();
+            defaultDevice->Release();
+            pEnumerator->Release();
+
+            // Prepare to send status update via TSFN
+            bool *isActivePtr = new bool(isActive);
+            auto callback = [](Napi::Env env, Napi::Function jsCallback, bool *data)
+            {
                 jsCallback.Call({Napi::Boolean::New(env, *data)});
                 delete data;
             };
 
-            bool* isActivePtr = new bool(isActive);
-            tsfn.BlockingCall(isActivePtr, callback);
+            // Extra synchronization before calling TSFN.BlockingCall
+            {
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    if (!tsfnValid || shouldStop)
+                    {
+                        delete isActivePtr;
+                        break;
+                    }
+                    // Mark that callback is in progress
+                    callbackInProgress = true;
+                    std::cout << "AudioMonitor: TSFN valid, calling BlockingCall" << std::endl;
+                }
+                try
+                {
+                    tsfn.BlockingCall(isActivePtr, callback);
+                }
+                catch (...)
+                {
+                    delete isActivePtr;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(tsfnMutex);
+                    callbackInProgress = false;
+                }
+            }
 
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            {
+                std::unique_lock<std::mutex> lock(tsfnMutex);
+                cv.wait_for(lock, std::chrono::seconds(1), [this]()
+                            { return shouldStop.load(); });
+            }
         }
 
-        defaultDevice->Release();
-        pEnumerator->Release();
+        CoUninitialize();
     }
 };
 
 Napi::FunctionReference AudioMonitor::constructor;
 
-Napi::Object Init(Napi::Env env, Napi::Object exports) {
+Napi::Object Init(Napi::Env env, Napi::Object exports)
+{
     return AudioMonitor::Init(env, exports);
 }
 
-NODE_API_MODULE(audio_monitor, Init) 
+NODE_API_MODULE(audio_monitor, Init)
