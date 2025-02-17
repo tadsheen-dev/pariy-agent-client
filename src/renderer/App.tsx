@@ -18,6 +18,7 @@ import Settings from './pages/Settings';
 import Performance from './pages/Performance';
 import RecordingPopup from './components/RecordingPopup';
 import ToastNotification from './components/ToastNotification';
+import logout from '../service/logoutService';
 
 // Types
 interface LayoutProps {
@@ -44,21 +45,7 @@ function Sidebar() {
         const workTime = Math.floor((Date.now() - startTime) / 1000);
 
         // Call logout API
-        const response = await fetch(process.env.API_LOGOUT as string, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            agent_id: agent.id,
-            workTime
-          }),
-        });
-
-        if (!response.ok) {
-          console.error('Logout failed:', await response.json());
-        }
+        await logout(agent.id, workTime);
       }
     } catch (error) {
       console.error('Error during logout:', error);
@@ -195,22 +182,9 @@ function LogoutHandler() {
         const startTime = parseInt(loginTime, 10);
         const workTime = Math.floor((Date.now() - startTime) / 1000);
         try {
-          const response = await fetch(process.env.API_LOGOUT as string, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            credentials: 'include',
-            body: JSON.stringify({
-              agent_id: agent.id,
-              workTime,
-            }),
-          });
-          if (!response.ok) {
-            console.error('Logout failed:', await response.json());
-          }
+          await logout(agent.id, workTime);
         } catch (error) {
-          console.error('Error during logout:', error);
+          console.error('Logout failed:', error);
         }
       }
       // Clear authentication data

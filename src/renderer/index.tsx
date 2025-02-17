@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import logout from '../service/logoutService';
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
@@ -17,21 +18,7 @@ async function handleLogoutAndCleanup() {
       const workTime = Math.floor((Date.now() - startTime) / 1000);
 
       // Call logout API via fetch
-      const response = await fetch(process.env.API_LOGOUT as string, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          agent_id: agent.id,
-          workTime,
-        }),
-      });
-
-      if (!response.ok) {
-        console.error('Logout failed:', await response.json());
-      }
+      await logout(agent.id, workTime);
     }
   } catch (error) {
     console.error('Error during logout:', error);

@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 /* eslint-disable prettier/prettier */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import analyzeAudio from '../../service/audioAnalysisService';
 
 interface Agent {
     id: string;
@@ -98,23 +99,11 @@ export default function RecordingPopup() {
 
             try {
                 console.log('Sending recording for analysis...');
-                const response = await fetch(process.env.API_AUDIO_ANALYSIS as string, {
-                    method: 'POST',
-                    body: formData,
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Analysis failed: ${response.statusText}`);
-                }
-
-                const analysisResponse = await response.json();
+                const analysisResponse = await analyzeAudio(formData);
                 console.log('Analysis received:', analysisResponse);
-
                 if (analysisResponse.object) {
                     const analysisObj = analysisResponse.object;
-                    const transcript = analysisObj.segments
-                        .map((seg: any) => seg.transcript_english)
-                        .join('\n');
+                    const transcript = analysisObj.segments.map((seg: any) => seg.transcript_english).join('\n');
                     console.log('Transcript:', transcript);
                     console.log('Analysis Results:', analysisObj);
                 }

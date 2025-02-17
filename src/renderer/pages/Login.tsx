@@ -4,19 +4,7 @@
 }] */
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-
-interface Agent {
-  id: string;
-  full_name: string;
-  email: string;
-  password: string;
-  avatar_url: string;
-  status: string;
-  platform_id: string;
-  platform: {
-    name: string;
-  };
-}
+import login from '../../service/authService';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -39,24 +27,7 @@ export default function Login() {
     setError('');
 
     try {
-      const response = await fetch(process.env.API_LOGIN as string, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Authentication failed');
-      }
-
-      const agent: Agent = await response.json();
+      const agent = await login(formData.email, formData.password);
 
       localStorage.setItem('agent_token', agent.id);
       localStorage.setItem('agent_data', JSON.stringify(agent));
@@ -68,12 +39,10 @@ export default function Login() {
 
       navigate('/');
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Invalid email or password',
-      );
-      if (process.env.NODE_ENV !== 'production') {
-        // eslint-disable-next-line no-console
-        console.error('Login error:', err);
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Unexpected error');
       }
     } finally {
       setLoading(false);
